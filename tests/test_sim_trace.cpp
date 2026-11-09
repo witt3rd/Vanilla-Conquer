@@ -127,7 +127,29 @@ static bool verify_lean_ffi_parity()
         }
     }
 
-    // 4. Verify Spot_Index and StoppingCoordAbs
+    // 4. Verify Spot_Index, StoppingCoordAbs, and MEGAMAPS 7-bit Coord_Cell (128x128)
+    for (uint32_t cy = 0; cy < 128; ++cy) {
+        for (uint32_t cx = 0; cx < 128; ++cx) {
+            uint32_t coord = (cy << 24) | 0x00800000u | (cx << 8) | 0x00000080u;
+            uint16_t cell128 = cnc_lean_coord_cell(coord);
+            uint16_t expected128 = static_cast<uint16_t>((cy << 7) | cx);
+            if (cell128 != expected128) {
+                std::fprintf(stderr, "FFI parity error: cnc_lean_coord_cell(cx=%u, cy=%u): %u != %u\n",
+                             cx, cy, cell128, expected128);
+                return false;
+            }
+            if (cx < 64 && cy < 64) {
+                uint16_t cell64 = cnc_lean_coord_cell_64(coord);
+                uint16_t expected64 = static_cast<uint16_t>((cy << 6) | cx);
+                if (cell64 != expected64) {
+                    std::fprintf(stderr, "FFI parity error: cnc_lean_coord_cell_64(cx=%u, cy=%u): %u != %u\n",
+                                 cx, cy, cell64, expected64);
+                    return false;
+                }
+            }
+        }
+    }
+
     const uint32_t expected_stopping[5] = {
         0x00800080u, 0x00400040u, 0x004000C0u, 0x00C00040u, 0x00C000C0u
     };

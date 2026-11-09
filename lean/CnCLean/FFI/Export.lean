@@ -83,9 +83,16 @@ def cncLeanCoordMove (start : UInt32) (dir : UInt8) (distance : UInt16) : UInt32
   let ny : UInt32 := (cncLeanMovePointY y dir distance).toUInt32
   (ny <<< 16) ||| nx
 
-/-- Unboxed `Coord_Cell(COORDINATE coord)` -/
+/-- Unboxed `Coord_Cell(COORDINATE coord)` for MEGAMAPS (7-bit X/Y cell indices, 128x128 grid) -/
 @[export cnc_lean_coord_cell]
 def cncLeanCoordCell (coord : UInt32) : UInt16 :=
+  let cx : UInt32 := (coord >>> 8) &&& 0x7F
+  let cy : UInt32 := (coord >>> 24) &&& 0x7F
+  (cx ||| (cy <<< 7)).toUInt16
+
+/-- Unboxed `Coord_Cell(COORDINATE coord)` for classic 64x64 grid (6-bit X/Y cell indices) -/
+@[export cnc_lean_coord_cell_64]
+def cncLeanCoordCell64 (coord : UInt32) : UInt16 :=
   let cx : UInt32 := (coord >>> 8) &&& 0x3F
   let cy : UInt32 := (coord >>> 24) &&& 0x3F
   (cx ||| (cy <<< 6)).toUInt16

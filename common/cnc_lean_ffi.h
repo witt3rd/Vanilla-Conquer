@@ -19,6 +19,7 @@ uint16_t cnc_lean_move_point_x(uint16_t x, uint8_t dir, uint16_t distance);
 uint16_t cnc_lean_move_point_y(uint16_t y, uint8_t dir, uint16_t distance);
 uint32_t cnc_lean_coord_move(uint32_t start, uint8_t dir, uint16_t distance);
 uint16_t cnc_lean_coord_cell(uint32_t coord);
+uint16_t cnc_lean_coord_cell_64(uint32_t coord);
 uint32_t cnc_lean_distance_coord(uint32_t coord1, uint32_t coord2);
 
 // Non-Cryptographic Deterministic PRNG (common/random.cpp)

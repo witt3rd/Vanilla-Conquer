@@ -62,7 +62,11 @@
  *=============================================================================================*/
 CELL Coord_Cell(COORDINATE coord)
 {
+#ifdef MEGAMAPS
     return static_cast<CELL>(cnc_lean_coord_cell(static_cast<uint32_t>(coord)));
+#else
+    return static_cast<CELL>(cnc_lean_coord_cell_64(static_cast<uint32_t>(coord)));
+#endif
 }
 
 /***********************************************************************************************

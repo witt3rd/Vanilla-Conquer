@@ -63,13 +63,15 @@ theorem step_transition_determinism (s1 s2 : SimState) (a1 a2 : List String)
   subst hs ha
   rfl
 
-/-- Invariant 7: FFI Exported Cell Extraction Equivalence
-    The unboxed C-exported `cncLeanCoordCell` matches `cellIndex` on unpacked coordinate components
-    for all 32-bit packed coordinates. -/
+/-- Invariant 7: FFI Exported Cell Extraction Equivalence (64x64 and 128x128 MEGAMAPS)
+    The unboxed C-exported `cncLeanCoordCell64` matches `cellIndex` on 64x64 coordinates,
+    and `cncLeanCoordCell` (128x128 MEGAMAPS) round-trips 7-bit X/Y cell coordinates without loss. -/
 theorem ffi_coord_cell_equivalence (coord : UInt32) :
     let (cx, cy, _, _) := coordComponents coord
-    (cncLeanCoordCell coord).toUInt32 = cellIndex cx cy := by
-  simp [cncLeanCoordCell, coordComponents, cellIndex]
+    (cncLeanCoordCell64 coord).toUInt32 = cellIndex cx cy ∧
+    ((cncLeanCoordCell coord) &&& 0x7F).toUInt32 = ((coord >>> 8) &&& 0x7F) ∧
+    (((cncLeanCoordCell coord) >>> 7) &&& 0x7F).toUInt32 = ((coord >>> 24) &&& 0x7F) := by
+  simp [cncLeanCoordCell64, cncLeanCoordCell, coordComponents, cellIndex]
   bv_decide
 
 end CnCLean.Proofs
