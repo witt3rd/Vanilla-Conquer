@@ -217,18 +217,37 @@ void Choose_Side(void)
         } else {
             endframe = frame;
         }
+        {
+            int mx = Get_Mouse_X();
+            int sw = SeenBuff.Get_Width() > 0 ? SeenBuff.Get_Width() : 640;
+            bool hover_gdi = (mx < sw / 2);
+            UltraMenuButtonInfo side_btns[3] = {
+                {0.316f,
+                 0.470f,
+                 0.178f,
+                 0.055f,
+                 "GLOBAL DEFENSE INITIATIVE",
+                 hover_gdi ? 1.0f : 0.25f,
+                 hover_gdi || (endframe != 255 && selection == 0),
+                 (endframe != 255 && selection == 0)},
+                {0.504f,
+                 0.470f,
+                 0.178f,
+                 0.055f,
+                 "BROTHERHOOD OF NOD",
+                 (!hover_gdi) ? 1.0f : 0.25f,
+                 (!hover_gdi) || (endframe != 255 && selection == 1),
+                 (endframe != 255 && selection == 1)},
+                {0.360f, 0.402f, 0.278f, 0.048f, "SELECT TRANSMISSION", 0.35f, false, false},
+            };
+            Video_Set_Ultra_Menu_State(true, side_btns, 3, VersionText, 2);
+        }
         if (Keyboard->Check() && endframe == 255) {
             if ((Keyboard->Get() & 0x10FF) == KN_LMOUSE) {
-                int x_off = (SeenBuff.Get_Width() > 320 * scale_factor)
-                                ? ((SeenBuff.Get_Width() - 320 * scale_factor) / 2)
-                                : 0;
-                int y_off = (SeenBuff.Get_Height() > 200 * scale_factor)
-                                ? ((SeenBuff.Get_Height() - 200 * scale_factor) / 2)
-                                : 0;
-                int mqx = Keyboard->MouseQX - x_off;
-                int mqy = Keyboard->MouseQY - y_off;
-                if ((mqy > 48 * scale_factor) && (mqy < 150 * scale_factor)) {
-                    if ((mqx > 18 * scale_factor) && (mqx < 148 * scale_factor)) {
+                int sw = SeenBuff.Get_Width() > 0 ? SeenBuff.Get_Width() : 640;
+                int sh = SeenBuff.Get_Height() > 0 ? SeenBuff.Get_Height() : 400;
+                if (Keyboard->MouseQY > sh / 16 && Keyboard->MouseQY < (sh * 15) / 16) {
+                    if (Keyboard->MouseQX < sw / 2) {
                         // Chose GDI
                         Whom = HOUSE_GOOD;
                         ScenPlayer = SCEN_PLAYER_GDI;
@@ -238,7 +257,7 @@ void Choose_Side(void)
                             speechplaying = true;
                             speech = speechg;
                         }
-                    } else if ((mqx > 160 * scale_factor) && (mqx < 300 * scale_factor)) {
+                    } else {
                         // Chose Nod
                         selection = 1;
                         endframe = anim ? 14 : frame;
@@ -255,6 +274,7 @@ void Choose_Side(void)
         }
     }
 
+    Video_Set_Ultra_Menu_State(false);
     Stop_Sample(statichandle);
     Hide_Mouse();
     Close_Animation(anim);

@@ -232,6 +232,22 @@ GameType Select_MPlayer_Game(void)
 
     buttons[curbutton]->Turn_On();
 
+    // Align button hitboxes with the 4K Ultra Menu CRT terminal layout
+    int sw_px = SeenBuff.Get_Width() > 0 ? SeenBuff.Get_Width() : 640;
+    int sh_px = SeenBuff.Get_Height() > 0 ? SeenBuff.Get_Height() : 400;
+    for (int bi = 0; bi < number_of_buttons; ++bi) {
+        TextButtonClass* b = buttons[bi];
+        bool is_cancel = (bi == number_of_buttons - 1);
+        float u0 = is_cancel ? 0.4048f : 0.3208f;
+        float uw = is_cancel ? 0.1777f : 0.3514f;
+        float v0 = 0.1600f + bi * 0.0950f;
+        float vh = 0.0520f;
+        b->X = static_cast<int>(u0 * sw_px);
+        b->Y = static_cast<int>(v0 * sh_px);
+        b->Width = static_cast<int>(uw * sw_px);
+        b->Height = static_cast<int>(vh * sh_px);
+    }
+
     Keyboard->Clear();
 
     Fancy_Text_Print(TXT_NONE, 0, 0, CC_GREEN, TBLACK, TPF_CENTER | TPF_6PT_GRAD | TPF_USE_GRAD_PAL | TPF_NOSHADOW);
@@ -367,6 +383,12 @@ GameType Select_MPlayer_Game(void)
             case (BUTTON_SKIRMISH):
                 GameToPlay = GAME_SKIRMISH;
                 Read_MultiPlayer_Settings();
+                HidPage.Clear();
+                Blit_Hid_Page_To_Seen_Buff();
+                {
+                    UltraMenuButtonInfo dlg_rect{0.10f, 0.08f, 0.80f, 0.84f, "", 0.0f, false, false};
+                    Video_Set_Ultra_Menu_State(true, &dlg_rect, 1, VersionText, 3);
+                }
                 if (Com_Scenario_Dialog()) {
                     retval = GAME_SKIRMISH;
                     process = false;
@@ -494,7 +516,37 @@ GameType Select_MPlayer_Game(void)
             pressed = false;
         }
 
-        Frame_Limiter();
+        // Synchronize live button hover/selection state with the native-4K Vulkan Ultra Menu renderer
+        if (process) {
+            int mx = Get_Mouse_X();
+            int my = Get_Mouse_Y();
+            UltraMenuButtonInfo ubtns[8]{};
+            float sw = static_cast<float>(sw_px);
+            float sh = static_cast<float>(sh_px);
+
+            for (int bi = 0; bi < number_of_buttons && bi < 8; ++bi) {
+                TextButtonClass* b = buttons[bi];
+                bool mouse_over = (mx >= b->X && mx < b->X + b->Width && my >= b->Y && my < b->Y + b->Height);
+                if (mouse_over && curbutton != bi) {
+                    buttons[curbutton]->Turn_Off();
+                    buttons[curbutton]->Flag_To_Redraw();
+                    curbutton = bi;
+                    buttons[curbutton]->Turn_On();
+                    buttons[curbutton]->Flag_To_Redraw();
+                }
+                ubtns[bi].x = static_cast<float>(b->X) / sw;
+                ubtns[bi].y = static_cast<float>(b->Y) / sh;
+                ubtns[bi].w = static_cast<float>(b->Width) / sw;
+                ubtns[bi].h = static_cast<float>(b->Height) / sh;
+                ubtns[bi].label = b->Get_Text();
+                ubtns[bi].hover = mouse_over ? 1.0f : (curbutton == bi ? 0.65f : 0.0f);
+                ubtns[bi].selected = (curbutton == bi);
+                ubtns[bi].pressed = (b->IsPressed != 0);
+            }
+            Video_Set_Ultra_Menu_State(true, ubtns, number_of_buttons, VersionText, 1);
+        }
+
+        Frame_Limiter(FrameLimitFlags::FL_FORCE_RENDER);
     }
     return (retval);
 #endif

@@ -1006,6 +1006,8 @@ bool Select_Game(bool fade)
             */
             if (display) {
                 Hide_Mouse();
+                Version_Number();
+                Video_Set_Ultra_Menu_State(true, nullptr, 0, VersionText, 1);
 
                 /*
                 **	Display the title page; fade it in if this is the first time
@@ -1034,8 +1036,8 @@ bool Select_Game(bool fade)
                 Show_Mouse();
             } else {
                 if (RunningAsDLL) {
+                    Video_Set_Ultra_Menu_State(false);
                     return true;
-                    ;
                 }
             }
             /*
@@ -1263,6 +1265,12 @@ bool Select_Game(bool fade)
 
                 case GAME_SKIRMISH:
 #ifndef REMASTER_BUILD
+                    HidPage.Clear();
+                    Blit_Hid_Page_To_Seen_Buff();
+                    {
+                        UltraMenuButtonInfo dlg_rect{0.10f, 0.08f, 0.80f, 0.84f, "", 0.0f, false, false};
+                        Video_Set_Ultra_Menu_State(true, &dlg_rect, 1, VersionText, 3);
+                    }
                     if (!Com_Scenario_Dialog()) {
                         GameToPlay = Select_MPlayer_Game();
                         if (GameToPlay == GAME_NORMAL) { // user hit Cancel
@@ -1378,6 +1386,7 @@ bool Select_Game(bool fade)
             **	Play a VQ
             */
             case SEL_INTRO:
+                Video_Set_Ultra_Menu_State(false);
                 Theme.Fade_Out();
                 Theme.Stop();
                 Call_Back();
@@ -1475,6 +1484,7 @@ bool Select_Game(bool fade)
 #endif
                 Theme.Fade_Out();
                 Fade_Palette_To(BlackPalette, FADE_PALETTE_SLOW, NULL);
+                Video_Set_Ultra_Menu_State(false);
 #ifdef JAPANESE
                 VisiblePage.Clear();
 #endif
@@ -1506,6 +1516,7 @@ bool Select_Game(bool fade)
                 break;
             }
         }
+        Video_Set_Ultra_Menu_State(false);
     } else {
 
         /*

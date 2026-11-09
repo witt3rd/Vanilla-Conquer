@@ -255,6 +255,12 @@ int LoadOptionsClass::Process(void)
     */
     if ((Style == LOAD || Style == WWDELETE) && listbtn.Count() == 0) {
         Clear_List(&listbtn);
+        if (!InMainLoop) {
+            HidPage.Clear();
+            Blit_Hid_Page_To_Seen_Buff();
+            UltraMenuButtonInfo dlg_rect{0.25f, 0.35f, 0.50f, 0.30f, "", 0.0f, false, false};
+            Video_Set_Ultra_Menu_State(true, &dlg_rect, 1, VersionText, 3);
+        }
         WWMessageBox().Process(TXT_NO_SAVES);
         return (false);
     }
@@ -315,7 +321,20 @@ int LoadOptionsClass::Process(void)
             } else {
                 HiddenPage.Clear();
                 Load_Title_Screen(TitlePicture, &HidPage, Palette);
+                HidPage.Clear();
                 Blit_Hid_Page_To_Seen_Buff();
+                float sw = static_cast<float>(SeenBuff.Get_Width() > 0 ? SeenBuff.Get_Width() : 640);
+                float sh = static_cast<float>(SeenBuff.Get_Height() > 0 ? SeenBuff.Get_Height() : 400);
+                UltraMenuButtonInfo dlg_rect{
+                    static_cast<float>(d_dialog_x) / sw,
+                    static_cast<float>(d_dialog_y) / sh,
+                    static_cast<float>(d_dialog_w) / sw,
+                    static_cast<float>(d_dialog_h) / sh,
+                    "",
+                    0.0f,
+                    false,
+                    false};
+                Video_Set_Ultra_Menu_State(true, &dlg_rect, 1, VersionText, 3);
             }
 
             /*
@@ -518,7 +537,11 @@ int LoadOptionsClass::Process(void)
             break;
         }
 
-        Frame_Limiter();
+        Frame_Limiter(InMainLoop ? FrameLimitFlags::FL_NONE : FrameLimitFlags::FL_FORCE_RENDER);
+    }
+
+    if (!InMainLoop) {
+        Video_Set_Ultra_Menu_State(false);
     }
 
     Clear_List(&listbtn);

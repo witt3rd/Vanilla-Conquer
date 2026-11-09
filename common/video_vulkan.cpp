@@ -1869,6 +1869,15 @@ public:
             ultraMenuState.ubo.params1[1] = (!Get_Mouse_State()) ? 1.0f : 0.0f;
             ultraMenuState.ubo.params1[2] = (mButtons & SDL_BUTTON(SDL_BUTTON_LEFT)) ? 1.0f : 0.0f;
 
+            // Compute live palette brightness so Fade_Palette_To smoothly fades the 4K Ultra Console in/out
+            float maxPalComp = 0.0f;
+            for (int pi = 1; pi < 255; ++pi) {
+                maxPalComp = std::max(maxPalComp, vkCtx.currentPalette.colors[pi][0]);
+                maxPalComp = std::max(maxPalComp, vkCtx.currentPalette.colors[pi][1]);
+                maxPalComp = std::max(maxPalComp, vkCtx.currentPalette.colors[pi][2]);
+            }
+            ultraMenuState.ubo.params1[3] = std::min(1.0f, std::max(0.0f, maxPalComp));
+
             std::memcpy(fr.menuUboMapped, &ultraMenuState.ubo, sizeof(UltraMenuUBOData));
         }
 
@@ -2374,7 +2383,8 @@ static void Pack_ASCII_To_UVec4_Pair(const char* str, uint32_t outWords[2][4], i
 void Video_Set_Ultra_Menu_State(bool active,
                                 const UltraMenuButtonInfo* buttons,
                                 int button_count,
-                                const char* version_text)
+                                const char* version_text,
+                                int mode)
 {
     if (active && !ultraMenuState.active) {
         ultraMenuState.startTime = std::chrono::steady_clock::now();
@@ -2387,6 +2397,7 @@ void Video_Set_Ultra_Menu_State(bool active,
     int count = std::max(0, std::min(button_count, 8));
     ultraMenuState.ubo.params1[0] = static_cast<float>(count);
     ultraMenuState.ubo.params1[3] = 1.0f;
+    ultraMenuState.ubo.ver_info[1] = static_cast<float>(mode);
 
     for (int i = 0; i < count && buttons != nullptr; ++i) {
         const UltraMenuButtonInfo& b = buttons[i];

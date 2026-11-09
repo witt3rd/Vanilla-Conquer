@@ -116,6 +116,7 @@ struct UltraMenuButtonInfo
 void Video_Set_Ultra_Menu_State(bool active,
                                 const UltraMenuButtonInfo* buttons = nullptr,
                                 int button_count = 0,
-                                const char* version_text = nullptr);
+                                const char* version_text = nullptr,
+                                int mode = 1);
 
 #endif // VIDEO_H

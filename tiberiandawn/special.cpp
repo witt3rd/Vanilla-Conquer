@@ -321,6 +321,33 @@ int Fetch_Difficulty(void)
     }
     slider.Add(*buttonlist);
 
+    // Align OK and Cancel button hitboxes with the 4K Ultra Menu CRT terminal layout
+    int sw_px = SeenBuff.Get_Width() > 0 ? SeenBuff.Get_Width() : 640;
+    int sh_px = SeenBuff.Get_Height() > 0 ? SeenBuff.Get_Height() : 400;
+    struct DiffBtnRect
+    {
+        float u, v, w, h;
+        const char* label;
+    };
+    static const DiffBtnRect kDiffRects[5] = {
+        {0.3208f, 0.1080f, 0.3514f, 0.0488f, "DIFFICULTY: EASY"},
+        {0.3208f, 0.1842f, 0.3514f, 0.0488f, "DIFFICULTY: NORMAL"},
+        {0.3208f, 0.2604f, 0.3514f, 0.0488f, "DIFFICULTY: HARD"},
+        {0.3208f, 0.3566f, 0.3514f, 0.0488f, "CONFIRM MISSION"},
+        {0.4048f, 0.4368f, 0.1777f, 0.0488f, "CANCEL"},
+    };
+    okbutton.X = static_cast<int>(kDiffRects[3].u * sw_px);
+    okbutton.Y = static_cast<int>(kDiffRects[3].v * sh_px);
+    okbutton.Width = static_cast<int>(kDiffRects[3].w * sw_px);
+    okbutton.Height = static_cast<int>(kDiffRects[3].h * sh_px);
+
+    cancelbutton.X = static_cast<int>(kDiffRects[4].u * sw_px);
+    cancelbutton.Y = static_cast<int>(kDiffRects[4].v * sh_px);
+    cancelbutton.Width = static_cast<int>(kDiffRects[4].w * sw_px);
+    cancelbutton.Height = static_cast<int>(kDiffRects[4].h * sh_px);
+
+    bool prev_mouse_down = (Get_Mouse_State() == 0) && ((Keyboard->Down(KN_LMOUSE)) != 0);
+
     /*
     **	Main Processing Loop.
     */
@@ -397,22 +424,83 @@ int Fetch_Difficulty(void)
         /*
         **	Fetch and process input.
         */
+        int mx = Get_Mouse_X();
+        int my = Get_Mouse_Y();
+        bool mouse_down = (Keyboard->Down(KN_LMOUSE) != 0);
+        if (mouse_down && !prev_mouse_down) {
+            for (int di = 0; di < 3; ++di) {
+                int bx = static_cast<int>(kDiffRects[di].u * sw_px);
+                int by = static_cast<int>(kDiffRects[di].v * sh_px);
+                int bw = static_cast<int>(kDiffRects[di].w * sw_px);
+                int bh = static_cast<int>(kDiffRects[di].h * sh_px);
+                if (mx >= bx && mx < bx + bw && my >= by && my < by + bh) {
+                    slider.Set_Value(Rule.IsFineDifficulty ? (di * 2) : di);
+                    Sound_Effect(VOC_BLEEP);
+                }
+            }
+        }
+        prev_mouse_down = mouse_down;
+
         KeyNumType input = buttonlist->Input();
 
         switch (input) {
+        case KN_UP:
+        case KN_LEFT:
+            if (slider.Get_Value() > 0) {
+                slider.Set_Value(slider.Get_Value() - (Rule.IsFineDifficulty ? 2 : 1));
+                Sound_Effect(VOC_BLEEP);
+            }
+            break;
+
+        case KN_DOWN:
+        case KN_RIGHT: {
+            int max_v = Rule.IsFineDifficulty ? 4 : 2;
+            if (slider.Get_Value() < max_v) {
+                slider.Set_Value(slider.Get_Value() + (Rule.IsFineDifficulty ? 2 : 1));
+                Sound_Effect(VOC_BLEEP);
+            }
+            break;
+        }
+
         case KN_RETURN:
         case (1 | BUTTON_FLAG):
             process = false;
             break;
 
+        case KN_ESC:
         case (3 | BUTTON_FLAG):
+            Video_Set_Ultra_Menu_State(true, nullptr, 0, VersionText, 1);
             return -1;
 
         default:
             break;
         }
 
-        Frame_Limiter();
+        // Update 4K Ultra Menu CRT buttons for Difficulty Selection
+        {
+            int cur_diff = Rule.IsFineDifficulty ? (slider.Get_Value() / 2) : slider.Get_Value();
+            cur_diff = std::max(0, std::min(cur_diff, 2));
+            UltraMenuButtonInfo ubtns[5]{};
+            for (int i = 0; i < 5; ++i) {
+                int bx = static_cast<int>(kDiffRects[i].u * sw_px);
+                int by = static_cast<int>(kDiffRects[i].v * sh_px);
+                int bw = static_cast<int>(kDiffRects[i].w * sw_px);
+                int bh = static_cast<int>(kDiffRects[i].h * sh_px);
+                bool over = (mx >= bx && mx < bx + bw && my >= by && my < by + bh);
+                bool sel = (i < 3) ? (cur_diff == i) : (i == 3);
+                ubtns[i].x = kDiffRects[i].u;
+                ubtns[i].y = kDiffRects[i].v;
+                ubtns[i].w = kDiffRects[i].w;
+                ubtns[i].h = kDiffRects[i].h;
+                ubtns[i].label = kDiffRects[i].label;
+                ubtns[i].hover = over ? 1.0f : (sel ? 0.72f : 0.0f);
+                ubtns[i].selected = sel;
+                ubtns[i].pressed = over && mouse_down;
+            }
+            Video_Set_Ultra_Menu_State(true, ubtns, 5, VersionText, 1);
+        }
+
+        Frame_Limiter(FrameLimitFlags::FL_FORCE_RENDER);
     }
 
     return (slider.Get_Value() * (Rule.IsFineDifficulty ? 1 : 2));

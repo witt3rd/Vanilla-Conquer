@@ -192,7 +192,22 @@ bool Expansion_Dialog(void)
             **	Load the background picture.
             */
             Load_Title_Screen(TitlePicture, &HidPage, Palette);
+            HidPage.Clear();
             Blit_Hid_Page_To_Seen_Buff();
+            {
+                float sw = static_cast<float>(SeenBuff.Get_Width() > 0 ? SeenBuff.Get_Width() : 640);
+                float sh = static_cast<float>(SeenBuff.Get_Height() > 0 ? SeenBuff.Get_Height() : 400);
+                UltraMenuButtonInfo dlg_rect{
+                    static_cast<float>(option_x) / sw,
+                    static_cast<float>(option_y) / sh,
+                    static_cast<float>(option_width) / sw,
+                    static_cast<float>(option_height) / sh,
+                    "",
+                    0.0f,
+                    false,
+                    false};
+                Video_Set_Ultra_Menu_State(true, &dlg_rect, 1, VersionText, 3);
+            }
 
             Dialog_Box(option_x, option_y, option_width, option_height);
             Draw_Caption(TXT_MISSION_DESCRIPTION, option_x, option_y, option_width);
@@ -234,8 +249,10 @@ bool Expansion_Dialog(void)
             break;
         }
 
-        Frame_Limiter();
+        Frame_Limiter(FrameLimitFlags::FL_FORCE_RENDER);
     }
+
+    Video_Set_Ultra_Menu_State(false);
 
     /*
     **	Free up the allocations for the text lines in the list box.
@@ -375,7 +392,22 @@ bool Bonus_Dialog(void)
             **	Load the background picture.
             */
             Load_Title_Screen(TitlePicture, &HidPage, Palette);
+            HidPage.Clear();
             Blit_Hid_Page_To_Seen_Buff();
+            {
+                float sw = static_cast<float>(SeenBuff.Get_Width() > 0 ? SeenBuff.Get_Width() : 640);
+                float sh = static_cast<float>(SeenBuff.Get_Height() > 0 ? SeenBuff.Get_Height() : 400);
+                UltraMenuButtonInfo dlg_rect{
+                    static_cast<float>(option_x) / sw,
+                    static_cast<float>(option_y) / sh,
+                    static_cast<float>(option_width) / sw,
+                    static_cast<float>(option_height) / sh,
+                    "",
+                    0.0f,
+                    false,
+                    false};
+                Video_Set_Ultra_Menu_State(true, &dlg_rect, 1, VersionText, 3);
+            }
 
             Dialog_Box(option_x, option_y, option_width, option_height);
             Draw_Caption(TXT_BONUS_MISSIONS, option_x, option_y, option_width);
