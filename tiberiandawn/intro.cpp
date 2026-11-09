@@ -219,8 +219,16 @@ void Choose_Side(void)
         }
         if (Keyboard->Check() && endframe == 255) {
             if ((Keyboard->Get() & 0x10FF) == KN_LMOUSE) {
-                if ((Keyboard->MouseQY > 48 * scale_factor) && (Keyboard->MouseQY < 150 * scale_factor)) {
-                    if ((Keyboard->MouseQX > 18 * scale_factor) && (Keyboard->MouseQX < 148 * scale_factor)) {
+                int x_off = (SeenBuff.Get_Width() > 320 * scale_factor)
+                                ? ((SeenBuff.Get_Width() - 320 * scale_factor) / 2)
+                                : 0;
+                int y_off = (SeenBuff.Get_Height() > 200 * scale_factor)
+                                ? ((SeenBuff.Get_Height() - 200 * scale_factor) / 2)
+                                : 0;
+                int mqx = Keyboard->MouseQX - x_off;
+                int mqy = Keyboard->MouseQY - y_off;
+                if ((mqy > 48 * scale_factor) && (mqy < 150 * scale_factor)) {
+                    if ((mqx > 18 * scale_factor) && (mqx < 148 * scale_factor)) {
                         // Chose GDI
                         Whom = HOUSE_GOOD;
                         ScenPlayer = SCEN_PLAYER_GDI;
@@ -230,7 +238,7 @@ void Choose_Side(void)
                             speechplaying = true;
                             speech = speechg;
                         }
-                    } else if ((Keyboard->MouseQX > 160 * scale_factor) && (Keyboard->MouseQX < 300 * scale_factor)) {
+                    } else if ((mqx > 160 * scale_factor) && (mqx < 300 * scale_factor)) {
                         // Chose Nod
                         selection = 1;
                         endframe = anim ? 14 : frame;
@@ -252,8 +260,12 @@ void Choose_Side(void)
     Close_Animation(anim);
 
     // erase the "choose side" text
+    int cs_x_off = (SeenBuff.Get_Width() > 320 * scale_factor) ? ((SeenBuff.Get_Width() - 320 * scale_factor) / 2) : 0;
+    int cs_y_off =
+        (SeenBuff.Get_Height() > 200 * scale_factor) ? ((SeenBuff.Get_Height() - 200 * scale_factor) / 2) : 0;
     PseudoSeenBuff->Fill_Rect(0, 180, 319, 199, 0);
-    SeenBuff.Fill_Rect(0, 180 * scale_factor, 319 * scale_factor, 199 * scale_factor, 0);
+    SeenBuff.Fill_Rect(
+        cs_x_off, cs_y_off + 180 * scale_factor, cs_x_off + 319 * scale_factor, cs_y_off + 199 * scale_factor, 0);
     Interpolate_2X_Scale(PseudoSeenBuff, &SeenBuff, "SIDES.PAL", Settings.Video.InterpolationMode);
     Keyboard->Clear();
     SysMemPage.Clear();

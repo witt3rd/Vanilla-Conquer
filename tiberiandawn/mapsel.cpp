@@ -866,18 +866,20 @@ void Map_Selection(void)
     ** If we're on the last scenario, erase that text before doing the crosshairs
     */
     if (lastscenario) {
+        int x_off = (SeenBuff.Get_Width() > 320 * factor) ? ((SeenBuff.Get_Width() - 320 * factor) / 2) : 0;
+        int y_off = (SeenBuff.Get_Height() > 200 * factor) ? ((SeenBuff.Get_Height() - 200 * factor) / 2) : 0;
 #if (GERMAN | FRENCH)
         SysMemPage.Fill_Rect(0, 160, 20 * 6, 186, TBLACK);
         PseudoSeenBuff->Fill_Rect(0, 160, 20 * 6, 186, TBLACK);
         TextPrintBuffer->Fill_Rect(0, factor * 160, factor * 20 * 6, factor * 186, BLACK);
-        SeenBuff.Fill_Rect(0, 2 * 160, 2 * 20 * 6, 2 * 186, TBLACK);
-        HidPage.Fill_Rect(0, 2 * 160, 2 * 20 * 6, 2 * 186, TBLACK);
+        SeenBuff.Fill_Rect(x_off, y_off + 2 * 160, x_off + 2 * 20 * 6, y_off + 2 * 186, TBLACK);
+        HidPage.Fill_Rect(x_off, y_off + 2 * 160, x_off + 2 * 20 * 6, y_off + 2 * 186, TBLACK);
 #else
         SysMemPage.Fill_Rect(0, 160, 20 * 6, 176, TBLACK);
         PseudoSeenBuff->Fill_Rect(0, 160, 20 * 6, 176, TBLACK);
         TextPrintBuffer->Fill_Rect(0, factor * 160, factor * 20 * 6, factor * 176, BLACK);
-        SeenBuff.Fill_Rect(0, 2 * 160, 2 * 20 * 6, 2 * 176, TBLACK);
-        HidPage.Fill_Rect(0, 2 * 160, 2 * 20 * 6, 2 * 176, TBLACK);
+        SeenBuff.Fill_Rect(x_off, y_off + 2 * 160, x_off + 2 * 20 * 6, y_off + 2 * 176, TBLACK);
+        HidPage.Fill_Rect(x_off, y_off + 2 * 160, x_off + 2 * 20 * 6, y_off + 2 * 176, TBLACK);
 #endif
         BlitList.Clear();
         Bit_It_In_Scale(0, 0, 320, 200, &SysMemPage, PseudoSeenBuff, &SeenBuff);
@@ -1037,8 +1039,14 @@ void Map_Selection(void)
         // Check for the mouse button
         if (Keyboard->Check()) {
             if ((Keyboard->Get() & 0x10FF) == KN_LMOUSE) {
+                int x_off = (SeenBuff.Get_Width() > 320 * factor) ? ((SeenBuff.Get_Width() - 320 * factor) / 2) : 0;
+                int y_off = (SeenBuff.Get_Height() > 200 * factor) ? ((SeenBuff.Get_Height() - 200 * factor) / 2) : 0;
+                int click_x = (Get_Mouse_X() - x_off) / factor;
+                int click_y = (Get_Mouse_Y() - y_off) / factor;
                 for (selection = 0; selection < CountryArray[scenario].Choices[ScenDir]; selection++) {
-                    color = click_map.Get_Pixel(Get_Mouse_X() / factor, Get_Mouse_Y() / factor);
+                    color = (click_x >= 0 && click_x < 320 && click_y >= 0 && click_y < 200)
+                                ? click_map.Get_Pixel(click_x, click_y)
+                                : 0;
 
                     /*
                     ** Special hack for Egypt the second time through

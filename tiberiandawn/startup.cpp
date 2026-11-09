@@ -54,6 +54,7 @@ HINSTANCE ProgramInstance;
 
 extern int ReadyToQuit;
 void Read_Setup_Options(RawFileClass* config_file);
+void Apply_Video_Resolution_Settings(void);
 
 bool VideoBackBufferAllowed = true;
 void Check_From_WChat(char* wchat_name);
@@ -208,7 +209,7 @@ int main(int argc, char** argv)
         printf("Zuwenig Hauptspeicher verf?gbar.\n");
 #else
 #ifdef FRENCH
-        printf("M‚moire vive (RAM) insuffisante.\n");
+        printf("MÂ‚moire vive (RAM) insuffisante.\n");
 #else
         printf("Insufficient RAM available.\n");
 #endif
@@ -286,6 +287,7 @@ int main(int argc, char** argv)
         ** Set the options as requested by the ccsetup program
         */
         Read_Setup_Options(&cfile);
+        Apply_Video_Resolution_Settings();
 
         CCDebugString("C&C95 - Creating main window.\n");
 

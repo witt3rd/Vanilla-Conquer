@@ -341,17 +341,17 @@ void SidebarClass::Init_IO(void)
             ShapeButtonClass* SBCUpgrade = (ShapeButtonClass*)Upgrade;
             ShapeButtonClass* SBCZoom = (ShapeButtonClass*)Zoom;
 
-            Repair->X = 484;
+            Repair->X = SideX + 4;
             Repair->Y = 160;
             SBCRepair->ReflectButtonState = true;
             SBCRepair->Set_Shape(Hires_Retrieve(repair_shp));
 
-            Upgrade->X = 480 + 57;
+            Upgrade->X = SideX + 57;
             Upgrade->Y = 160;
             SBCUpgrade->ReflectButtonState = true;
             SBCUpgrade->Set_Shape(Hires_Retrieve(sell_shp));
 
-            Zoom->X = 480 + 110;
+            Zoom->X = SideX + 110;
             Zoom->Y = 160;
             SBCZoom->Set_Shape(Hires_Retrieve(map_shp));
         } else {
@@ -801,6 +801,9 @@ void SidebarClass::Draw_It(bool complete)
                 LogicPage->Draw_Line(SideX, 157, SeenBuff.Get_Width() - 1, 157, 0);
                 CC_Draw_Shape(SidebarShape1, 0, SideX, 158, WINDOW_MAIN, SHAPE_WIN_REL);
                 CC_Draw_Shape(SidebarShape2, 0, SideX, 158 + 118, WINDOW_MAIN, SHAPE_WIN_REL);
+                if (SeenBuff.Get_Height() > 400) {
+                    Draw_Box(SideX, 400, SideWidth, SeenBuff.Get_Height() - 400, BOXSTYLE_GREEN_BORDER, true);
+                }
             }
 
             //  Repair.Draw_Me(true);

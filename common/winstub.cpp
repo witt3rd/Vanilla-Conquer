@@ -62,7 +62,18 @@ void Load_Title_Screen(const char* name, GraphicViewPortClass* video_page, unsig
 
     DBG_INFO("Load_Title_Screen('%s'): load_buffer=%p", name, (void*)load_buffer);
     if (load_buffer) {
-        load_buffer->Blit(*video_page);
+        int dst_w = video_page->Get_Width();
+        int dst_h = video_page->Get_Height();
+        int src_w = load_buffer->Get_Width();
+        int src_h = load_buffer->Get_Height();
+        if (dst_w > src_w || dst_h > src_h) {
+            video_page->Clear();
+            int x_off = (dst_w > src_w) ? ((dst_w - src_w) / 2) : 0;
+            int y_off = (dst_h > src_h) ? ((dst_h - src_h) / 2) : 0;
+            load_buffer->Blit(*video_page, 0, 0, x_off, y_off, src_w, src_h);
+        } else {
+            load_buffer->Blit(*video_page);
+        }
         delete load_buffer;
     }
 }

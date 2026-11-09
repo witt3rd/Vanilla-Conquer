@@ -95,6 +95,9 @@ int Confine_Rect(int* x, int* y, int w, int h, int width, int height)
     if ((-*x & (*x + w - width - 1)) >= 0) {
         if (*x > 0) {
             *x -= *x + w - width;
+            if (*x < 0) {
+                *x = 0;
+            }
         } else {
             *x = 0;
         }
@@ -105,6 +108,9 @@ int Confine_Rect(int* x, int* y, int w, int h, int width, int height)
     if ((-*y & (*y + h - height - 1)) >= 0) {
         if (*y > 0) {
             *y -= *y + h - height;
+            if (*y < 0) {
+                *y = 0;
+            }
         } else {
             *y = 0;
         }

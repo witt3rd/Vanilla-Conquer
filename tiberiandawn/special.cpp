@@ -283,8 +283,8 @@ int Fetch_Difficulty(void)
     int factor = (SeenBuff.Get_Width() == 320) ? 1 : 2;
     int const w = 250 * factor;
     int const h = 70 * factor;
-    int const x = ((320 * factor) / 2) - w / 2;
-    int const y = ((200 * factor) / 2) - h / 2;
+    int const x = (SeenBuff.Get_Width() / 2) - w / 2;
+    int const y = (SeenBuff.Get_Height() / 2) - h / 2;
     int const bwidth = 30 * factor;
 
     /*

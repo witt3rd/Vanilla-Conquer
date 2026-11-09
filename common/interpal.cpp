@@ -359,7 +359,15 @@ void Interpolate_2X_Scale(GraphicBufferClass* source,
     // Get width of source and dest buffers.
     //
     src_width = source->Get_Width();
-    dest_width = (scale_factor + 1) * (dest->Get_Width() + dest->Get_XAdd() + dest->Get_Pitch());
+    int dest_stride = dest->Get_Width() + dest->Get_XAdd() + dest->Get_Pitch();
+    int out_w = (mode == -1) ? src_width : (2 * src_width);
+    int out_h = (mode == -1) ? source->Get_Height() : (2 * source->Get_Height());
+    if (dest->Get_Width() > out_w || dest->Get_Height() > out_h) {
+        int x_off = (dest->Get_Width() > out_w) ? ((dest->Get_Width() - out_w) / 2) : 0;
+        int y_off = (dest->Get_Height() > out_h) ? ((dest->Get_Height() - out_h) / 2) : 0;
+        dest_ptr += y_off * dest_stride + x_off;
+    }
+    dest_width = (scale_factor + 1) * dest_stride;
     last_dest_ptr = dest_ptr;
 
     int h = source->Get_Height();

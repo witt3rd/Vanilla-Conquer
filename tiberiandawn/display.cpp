@@ -666,10 +666,16 @@ void DisplayClass::Set_View_Dimensions(int x, int y, int width, int height)
     if (width == -1) {
         width = SeenBuff.Get_Width() - x;
     }
+    if (MapCellWidth > 0 && width > MapCellWidth * ICON_PIXEL_W) {
+        width = MapCellWidth * ICON_PIXEL_W;
+    }
     TacLeptonWidth = Pixel_To_Lepton(width);
 
     if (height == -1) {
         height = SeenBuff.Get_Height() - y;
+    }
+    if (MapCellHeight > 0 && height > MapCellHeight * ICON_PIXEL_H) {
+        height = MapCellHeight * ICON_PIXEL_H;
     }
     TacLeptonHeight = Pixel_To_Lepton(height);
 
@@ -1353,6 +1359,7 @@ void DisplayClass::Read_INI(CCINIClass& ini)
     if (Scen.Waypoint[WAYPT_HOME] == -1) {
         Scen.Waypoint[WAYPT_HOME] = XY_Cell(MapCellX, MapCellY);
     }
+    Set_View_Dimensions(0, Map.Get_Tab_Height(), Map.IsSidebarActive ? (SeenBuff.Get_Width() - Map.SideWidth) : -1);
     Set_Tactical_Position(Coord_Whole(Cell_Coord(Scen.Waypoint[WAYPT_HOME])));
     Scen.Views[0] = Scen.Views[1] = Scen.Views[2] = Scen.Views[3] = Scen.Waypoint[WAYPT_HOME];
 
@@ -2094,6 +2101,18 @@ void DisplayClass::Draw_It(bool forced)
 
     if (IsToRedraw || forced) {
         IsToRedraw = false;
+
+        if (forced) {
+            int max_tac_right = SeenBuff.Get_Width() - (Map.IsSidebarActive ? Map.SideWidth : 0);
+            int tac_right = TacPixelX + Lepton_To_Pixel(TacLeptonWidth);
+            int tac_bottom = TacPixelY + Lepton_To_Pixel(TacLeptonHeight);
+            if (tac_right < max_tac_right) {
+                LogicPage->Fill_Rect(tac_right, TacPixelY, max_tac_right - 1, SeenBuff.Get_Height() - 1, BLACK);
+            }
+            if (tac_bottom < SeenBuff.Get_Height()) {
+                LogicPage->Fill_Rect(TacPixelX, tac_bottom, max_tac_right - 1, SeenBuff.Get_Height() - 1, BLACK);
+            }
+        }
 
         /*
         **	In rubber band mode, mark all cells under the "rubber band" to be

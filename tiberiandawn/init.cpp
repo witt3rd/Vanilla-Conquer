@@ -46,6 +46,7 @@
 #include "common/vqaconfig.h"
 #include "common/wspudp.h"
 #include "common/paths.h"
+#include "common/settings.h"
 #include "common/winasm.h"
 #include <time.h>
 
@@ -1877,6 +1878,13 @@ bool Parse_Command_Line(int argc, char* argv[])
                  "  -STEALTH  = Hide multiplayer names (\"Boss mode\")\r\n"
                  "  -MESSAGES = Allow messages from outside this game.\r\n"
                  "  -o        = Enable compatability with version 1.07.\r\n"
+                 "  -1k/-1080p= 1K Full HD (1920x1080 window, 960x540 2x tactical view)\r\n"
+                 "  -2k/-1440p= 2K QHD (2560x1440 window, 1280x720 2x tactical view)\r\n"
+                 "  -4k/-2160p= 4K UHD (3840x2160 window, 1280x720 3x tactical view)\r\n"
+                 "  -scale N  = Integer pixel scale factor (1..8) for 1K/2K/4K/window\r\n"
+                 "  -native   = 1:1 native internal resolution (equivalent to -scale 1)\r\n"
+                 "  -res WxH  = Explicit internal tactical resolution (e.g. -res 1920x1080)\r\n"
+                 "  -fullscreen / -window = Force fullscreen or windowed mode\r\n"
 #ifdef JAPANESE
                  "  -ENGLISH  = Enable English keyboard compatibility.\r\n"
 #endif
@@ -2086,6 +2094,76 @@ bool Parse_Command_Line(int argc, char* argv[])
             continue;
         }
 
+        /*
+        **	1K / 2K / 4K and custom resolution / tactical scale CLI options
+        */
+        if (stricmp(string, "-1K") == 0 || stricmp(string, "-1080P") == 0 || stricmp(string, "-FHD") == 0) {
+            extern void Set_CLI_Video_Preset(int w, int h, int def_scale);
+            Set_CLI_Video_Preset(1920, 1080, 2);
+            continue;
+        }
+        if (stricmp(string, "-2K") == 0 || stricmp(string, "-1440P") == 0 || stricmp(string, "-QHD") == 0) {
+            extern void Set_CLI_Video_Preset(int w, int h, int def_scale);
+            Set_CLI_Video_Preset(2560, 1440, 2);
+            continue;
+        }
+        if (stricmp(string, "-4K") == 0 || stricmp(string, "-2160P") == 0 || stricmp(string, "-UHD") == 0) {
+            extern void Set_CLI_Video_Preset(int w, int h, int def_scale);
+            Set_CLI_Video_Preset(3840, 2160, 3);
+            continue;
+        }
+        if (stricmp(string, "-NATIVE") == 0) {
+            extern void Set_CLI_Video_Scale(int scale);
+            Set_CLI_Video_Scale(1);
+            continue;
+        }
+        if (strnicmp(string, "-SCALE", 6) == 0) {
+            extern void Set_CLI_Video_Scale(int scale);
+            const char* val = string + 6;
+            if (*val == '=') {
+                val++;
+            } else if (*val == '\0' && (index + 1) < argc) {
+                val = argv[++index];
+            }
+            int s = atoi(val);
+            if (s >= 1 && s <= 8) {
+                Set_CLI_Video_Scale(s);
+            }
+            continue;
+        }
+        if (strnicmp(string, "-RES", 4) == 0) {
+            extern void Set_CLI_Video_Internal_Res(int w, int h);
+            char res_buf[64] = {0};
+            const char* val = string + 4;
+            if (*val == '=') {
+                val++;
+            } else if (*val == '\0' && (index + 1) < argc) {
+                val = argv[++index];
+            }
+            strncpy(res_buf, val, sizeof(res_buf) - 1);
+            strupr(res_buf);
+            char* x_pos = strchr(res_buf, 'X');
+            if (x_pos) {
+                *x_pos = '\0';
+                int rw = atoi(res_buf);
+                int rh = atoi(x_pos + 1);
+                if (rw >= 640 && rh >= 400) {
+                    Set_CLI_Video_Internal_Res(rw, rh);
+                }
+            }
+            continue;
+        }
+        if (stricmp(string, "-FULLSCREEN") == 0) {
+            extern void Set_CLI_Video_Windowed(int windowed);
+            Set_CLI_Video_Windowed(0);
+            continue;
+        }
+        if (stricmp(string, "-WINDOW") == 0 || stricmp(string, "-WINDOWED") == 0) {
+            extern void Set_CLI_Video_Windowed(int windowed);
+            Set_CLI_Video_Windowed(1);
+            continue;
+        }
+
 #ifdef CHEAT_KEYS
         /*
         **	Allow solo net play
@@ -2228,6 +2306,110 @@ bool Parse_Command_Line(int argc, char* argv[])
         }
     }
     return (true);
+}
+
+struct CLIVideoOverrides
+{
+    bool HasPreset;
+    int TargetWidth;
+    int TargetHeight;
+    int DefaultScale;
+    int ExplicitScale;
+    int ExplicitInternalWidth;
+    int ExplicitInternalHeight;
+    int WindowedOverride;
+};
+
+static CLIVideoOverrides CLIVideo = {false, 0, 0, 0, 0, 0, 0, -1};
+
+void Set_CLI_Video_Preset(int w, int h, int def_scale)
+{
+    CLIVideo.HasPreset = true;
+    CLIVideo.TargetWidth = w;
+    CLIVideo.TargetHeight = h;
+    CLIVideo.DefaultScale = def_scale;
+}
+
+void Set_CLI_Video_Scale(int scale)
+{
+    CLIVideo.ExplicitScale = scale;
+}
+
+void Set_CLI_Video_Internal_Res(int w, int h)
+{
+    CLIVideo.ExplicitInternalWidth = w;
+    CLIVideo.ExplicitInternalHeight = h;
+}
+
+void Set_CLI_Video_Windowed(int windowed)
+{
+    CLIVideo.WindowedOverride = windowed;
+}
+
+void Apply_Video_Resolution_Settings(void)
+{
+    if (CLIVideo.WindowedOverride != -1) {
+        Settings.Video.Windowed = (CLIVideo.WindowedOverride == 1);
+    }
+
+    if (CLIVideo.HasPreset) {
+        Settings.Video.WindowWidth = CLIVideo.TargetWidth;
+        Settings.Video.WindowHeight = CLIVideo.TargetHeight;
+        if (!Settings.Video.Windowed) {
+            Settings.Video.Width = CLIVideo.TargetWidth;
+            Settings.Video.Height = CLIVideo.TargetHeight;
+        }
+    }
+
+    int scale = 0;
+    if (CLIVideo.ExplicitScale > 0) {
+        scale = CLIVideo.ExplicitScale;
+    } else if (CLIVideo.HasPreset) {
+        scale = (Settings.Video.Scale > 0) ? Settings.Video.Scale : CLIVideo.DefaultScale;
+    } else {
+        scale = Settings.Video.Scale;
+    }
+
+    int internal_w = 0;
+    int internal_h = 0;
+
+    if (CLIVideo.ExplicitInternalWidth >= 640 && CLIVideo.ExplicitInternalHeight >= 400) {
+        internal_w = CLIVideo.ExplicitInternalWidth;
+        internal_h = CLIVideo.ExplicitInternalHeight;
+        if (!CLIVideo.HasPreset && scale <= 0) {
+            if (Settings.Video.WindowWidth < internal_w) {
+                Settings.Video.WindowWidth = internal_w;
+            }
+            if (Settings.Video.WindowHeight < internal_h) {
+                Settings.Video.WindowHeight = internal_h;
+            }
+        }
+    } else if (scale > 0) {
+        int ref_w = CLIVideo.HasPreset
+                        ? CLIVideo.TargetWidth
+                        : (Settings.Video.Windowed
+                               ? Settings.Video.WindowWidth
+                               : (Settings.Video.Width > 0 ? Settings.Video.Width : Settings.Video.WindowWidth));
+        int ref_h = CLIVideo.HasPreset
+                        ? CLIVideo.TargetHeight
+                        : (Settings.Video.Windowed
+                               ? Settings.Video.WindowHeight
+                               : (Settings.Video.Height > 0 ? Settings.Video.Height : Settings.Video.WindowHeight));
+        internal_w = MAX(640, (ref_w / scale) & ~1);
+        internal_h = MAX(400, (ref_h / scale) & ~1);
+    } else if (Settings.Video.InternalWidth >= 640 && Settings.Video.InternalHeight >= 400) {
+        internal_w = Settings.Video.InternalWidth & ~1;
+        internal_h = Settings.Video.InternalHeight & ~1;
+    }
+
+    if (internal_w >= 640 && internal_h >= 400) {
+        ScreenWidth = internal_w & ~1;
+        ScreenHeight = internal_h & ~1;
+        if (ScreenWidth != 640 || ScreenHeight != 400) {
+            Settings.Video.BoxingAspectRatio =
+                std::to_string(ScreenWidth) + ":" + std::to_string(ScreenHeight);
+        }
+    }
 }
 
 #ifdef ONHOLD

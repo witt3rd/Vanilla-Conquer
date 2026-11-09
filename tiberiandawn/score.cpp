@@ -445,6 +445,8 @@ void ScoreScaleClass::Update(void)
     static int _destx[] = {0, 80, 107, 134, 180, 228};
     static int _destw[] = {6, 20, 30, 40, 60, 80};
     int factor = 1 + Get_Resolution_Factor();
+    int x_off = (HidPage.Get_Width() > 320 * factor) ? ((HidPage.Get_Width() - 320 * factor) / 2) : 0;
+    int y_off = (HidPage.Get_Height() > 200 * factor) ? ((HidPage.Get_Height() - 200 * factor) / 2) : 0;
 
     /*
     ** Restore the background for the scaled-up letter
@@ -455,8 +457,8 @@ void ScoreScaleClass::Update(void)
             TextPrintBuffer->Blit(HidPage,
                                   _destx[Stage + 1] * factor,
                                   YPos * factor,
-                                  _destx[Stage + 1] * factor,
-                                  YPos * factor,
+                                  _destx[Stage + 1] * factor + x_off,
+                                  YPos * factor + y_off,
                                   _destw[Stage + 1] * factor,
                                   _destw[Stage + 1] * factor);
             // SysMemPage.Blit(*PseudoSeenBuff, _destx[Stage+1], YPos, _destx[Stage+1], YPos, _destw[Stage+1],
@@ -469,8 +471,8 @@ void ScoreScaleClass::Update(void)
             TextPrintBuffer->Scale(HidPage,
                                    0,
                                    0,
-                                   _destx[Stage] * factor,
-                                   YPos * factor,
+                                   _destx[Stage] * factor + x_off,
+                                   YPos * factor + y_off,
                                    5 * factor,
                                    5 * factor,
                                    _destw[Stage] * factor,
@@ -543,14 +545,17 @@ void TextBlitClass::Update(void)
     if (TextPrintBuffer) {
 
         if (HidPage.Lock()) {
+            int factor = 1 + Get_Resolution_Factor();
+            int x_off = (HidPage.Get_Width() > 320 * factor) ? ((HidPage.Get_Width() - 320 * factor) / 2) : 0;
+            int y_off = (HidPage.Get_Height() > 200 * factor) ? ((HidPage.Get_Height() - 200 * factor) / 2) : 0;
 
             for (int i = 0; i < Count; i++) {
 
                 TextPrintBuffer->Blit(HidPage,
                                       BlitListo[i].SourceX,
                                       BlitListo[i].SourceY,
-                                      BlitListo[i].DestX,
-                                      BlitListo[i].DestY,
+                                      BlitListo[i].DestX + x_off,
+                                      BlitListo[i].DestY + y_off,
                                       BlitListo[i].Width,
                                       BlitListo[i].Height,
                                       true);

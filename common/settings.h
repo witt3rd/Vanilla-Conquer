@@ -29,6 +29,9 @@ public:
         std::string BoxingAspectRatio;
         int Width;
         int Height;
+        int InternalWidth;
+        int InternalHeight;
+        int Scale;
         int FrameLimit;
         int InterpolationMode;
         bool HardwareCursor;

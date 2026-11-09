@@ -455,28 +455,31 @@ int Do_Menu(char const** strings, bool blue)
 int Main_Menu(unsigned int timeout)
 {
     int scale_factor = Get_Resolution_Factor() + 1;
+    int x_off = (SeenBuff.Get_Width() > 320 * scale_factor) ? ((SeenBuff.Get_Width() - 320 * scale_factor) / 2) : 0;
+    int y_off = (SeenBuff.Get_Height() > 200 * scale_factor) ? ((SeenBuff.Get_Height() - 200 * scale_factor) / 2) : 0;
 
-    int D_DIALOG_W = 152 * scale_factor, D_DIALOG_H = 136 * scale_factor, D_DIALOG_X = 85 * scale_factor,
-        D_DIALOG_Y = 0, D_DIALOG_CX = D_DIALOG_X + (D_DIALOG_W / scale_factor),
+    int D_DIALOG_W = 152 * scale_factor, D_DIALOG_H = 136 * scale_factor, D_DIALOG_X = 85 * scale_factor + x_off,
+        D_DIALOG_Y = 0 + y_off, D_DIALOG_CX = D_DIALOG_X + (D_DIALOG_W / scale_factor),
 
-        D_START_W = 125 * scale_factor, D_START_H = 9 * scale_factor, D_START_X = 98 * scale_factor,
-        D_START_Y = 35 * scale_factor,
+        D_START_W = 125 * scale_factor, D_START_H = 9 * scale_factor, D_START_X = 98 * scale_factor + x_off,
+        D_START_Y = 35 * scale_factor + y_off,
 
 #ifdef BONUS_MISSIONS
-        D_BONUS_W = 125 * scale_factor, D_BONUS_H = 9 * scale_factor, D_BONUS_X = 98 * scale_factor, D_BONUS_Y = 0,
+        D_BONUS_W = 125 * scale_factor, D_BONUS_H = 9 * scale_factor, D_BONUS_X = 98 * scale_factor + x_off,
+        D_BONUS_Y = 0 + y_off,
 #endif // BONUS_MISSIONS
 
-        D_INTERNET_W = 125 * scale_factor, D_INTERNET_H = 9 * scale_factor, D_INTERNET_X = 98 * scale_factor,
-        D_INTERNET_Y = 36 * scale_factor,
+        D_INTERNET_W = 125 * scale_factor, D_INTERNET_H = 9 * scale_factor, D_INTERNET_X = 98 * scale_factor + x_off,
+        D_INTERNET_Y = 36 * scale_factor + y_off,
 
-        D_LOAD_W = 125 * scale_factor, D_LOAD_H = 9 * scale_factor, D_LOAD_X = 98 * scale_factor,
-        D_LOAD_Y = 53 * scale_factor,
+        D_LOAD_W = 125 * scale_factor, D_LOAD_H = 9 * scale_factor, D_LOAD_X = 98 * scale_factor + x_off,
+        D_LOAD_Y = 53 * scale_factor + y_off,
 
-        D_MULTI_W = 125 * scale_factor, D_MULTI_H = 9 * scale_factor, D_MULTI_X = 98 * scale_factor,
-        D_MULTI_Y = 71 * scale_factor,
+        D_MULTI_W = 125 * scale_factor, D_MULTI_H = 9 * scale_factor, D_MULTI_X = 98 * scale_factor + x_off,
+        D_MULTI_Y = 71 * scale_factor + y_off,
 
-        D_INTRO_W = 125 * scale_factor, D_INTRO_H = 9 * scale_factor, D_INTRO_X = 98 * scale_factor,
-        D_INTRO_Y = 89 * scale_factor,
+        D_INTRO_W = 125 * scale_factor, D_INTRO_H = 9 * scale_factor, D_INTRO_X = 98 * scale_factor + x_off,
+        D_INTRO_Y = 89 * scale_factor + y_off,
 #if (GERMAN | FRENCH)
         D_EXIT_W = 83 * scale_factor,
 #else
@@ -484,14 +487,14 @@ int Main_Menu(unsigned int timeout)
 #endif
         D_EXIT_H = 9 * scale_factor,
 #if (GERMAN | FRENCH)
-        D_EXIT_X = 118 * scale_factor,
+        D_EXIT_X = 118 * scale_factor + x_off,
 #else
-        D_EXIT_X = 128 * scale_factor,
+        D_EXIT_X = 128 * scale_factor + x_off,
 #endif
-        D_EXIT_Y = 111 * scale_factor;
+        D_EXIT_Y = 111 * scale_factor + y_off;
 
 #ifdef NEWMENU
-    int starty = 25 * scale_factor;
+    int starty = 25 * scale_factor + y_off;
 #endif
 
     // Make sure any changes to buttons here are also reflected in the enum and handling in Select_Game in init.cpp.

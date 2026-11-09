@@ -174,8 +174,12 @@ void Nod_Ending(void)
             } else {
                 int key = Keyboard->Get();
                 if ((key & 0x10FF) == KN_LMOUSE && !(key & KN_RLSE_BIT)) {
-                    int mousex = Keyboard->MouseQX;
-                    int mousey = Keyboard->MouseQY;
+                    int x_off =
+                        (SeenBuff.Get_Width() > 320 * factor) ? ((SeenBuff.Get_Width() - 320 * factor) / 2) : 0;
+                    int y_off =
+                        (SeenBuff.Get_Height() > 200 * factor) ? ((SeenBuff.Get_Height() - 200 * factor) / 2) : 0;
+                    int mousex = Keyboard->MouseQX - x_off;
+                    int mousey = Keyboard->MouseQY - y_off;
                     if (mousey >= 22 * factor && mousey <= 177 * factor) {
                         done = true;
                         if (mousex < 160 * factor && mousey < 100 * factor)
@@ -201,7 +205,9 @@ void Nod_Ending(void)
             ScoreObjs[i] = 0;
         }
     // erase the "choose a target" text
-    SeenBuff.Fill_Rect(0, 180 * 2, 319 * 2, 199 * 2, 0);
+    int end_x_off = (SeenBuff.Get_Width() > 320 * factor) ? ((SeenBuff.Get_Width() - 320 * factor) / 2) : 0;
+    int end_y_off = (SeenBuff.Get_Height() > 200 * factor) ? ((SeenBuff.Get_Height() - 200 * factor) / 2) : 0;
+    SeenBuff.Fill_Rect(end_x_off, end_y_off + 180 * 2, end_x_off + 319 * 2, end_y_off + 199 * 2, 0);
     TextPrintBuffer->Fill_Rect(0, 180 * 2, 319 * 2, 199 * 2, 0);
 
     Hide_Mouse();
