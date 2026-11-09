@@ -495,14 +495,14 @@ int Open_File(char const* file_name, int mode)
 
 void Close_File(int handle)
 {
-    if (handle != WWERROR && Handles[handle].Is_Open()) {
+    if (handle >= 0 && handle < (int)ARRAY_SIZE(Handles) && Handles[handle].Is_Open()) {
         Handles[handle].Close();
     }
 }
 
 int Read_File(int handle, void* buf, unsigned int bytes)
 {
-    if (handle != WWERROR && Handles[handle].Is_Open()) {
+    if (handle >= 0 && handle < (int)ARRAY_SIZE(Handles) && Handles[handle].Is_Open()) {
         return (Handles[handle].Read(buf, bytes));
     }
     return (0);
@@ -510,7 +510,7 @@ int Read_File(int handle, void* buf, unsigned int bytes)
 
 int Write_File(int handle, void const* buf, unsigned int bytes)
 {
-    if (handle != WWERROR && Handles[handle].Is_Open()) {
+    if (handle >= 0 && handle < (int)ARRAY_SIZE(Handles) && Handles[handle].Is_Open()) {
         return (Handles[handle].Write(buf, bytes));
     }
     return (0);
@@ -529,7 +529,7 @@ int Delete_File(char const* file_name)
 
 unsigned int File_Size(int handle)
 {
-    if (handle != WWERROR && Handles[handle].Is_Open()) {
+    if (handle >= 0 && handle < (int)ARRAY_SIZE(Handles) && Handles[handle].Is_Open()) {
         return (Handles[handle].Size());
     }
     return (0);
@@ -537,7 +537,7 @@ unsigned int File_Size(int handle)
 
 unsigned int Seek_File(int handle, int offset, int starting)
 {
-    if (handle != WWERROR && Handles[handle].Is_Open()) {
+    if (handle >= 0 && handle < (int)ARRAY_SIZE(Handles) && Handles[handle].Is_Open()) {
         return (Handles[handle].Seek(offset, starting));
     }
     return (0);

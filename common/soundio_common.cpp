@@ -381,7 +381,7 @@ Stream_Sample_Vol(void* buffer, int size, bool (*callback)(short, short*, void**
 
 static bool File_Callback(short id, short* odd, void** buffer, int* size)
 {
-    if (id == INVALID_AUDIO_HANDLE) {
+    if (id < 0 || id >= MAX_SAMPLE_TRACKERS) {
         return false;
     }
 
@@ -449,6 +449,9 @@ static bool File_Callback(short id, short* odd, void** buffer, int* size)
 
 static void File_Stream_Preload(int index)
 {
+    if (index < 0 || index >= MAX_SAMPLE_TRACKERS) {
+        return;
+    }
     SampleTrackerType* st = &LockedData.SampleTracker[index];
     int maxnum = (LockedData.StreamBufferCount / 2) + 4;
     int num = st->Loading ? std::min<int>(st->FilePending + 2, maxnum) : maxnum;
@@ -494,6 +497,7 @@ static void File_Stream_Preload(int index)
             st->FilePendingSize = 0;
             st->Callback = nullptr;
             Close_File(st->FileHandle);
+            st->FileHandle = INVALID_FILE_HANDLE;
         } else {
             st->Odd = 2;
             --st->FilePending;
@@ -535,7 +539,7 @@ int File_Stream_Sample_Vol(char const* filename, int volume, bool real_time_star
 
     int handle = Get_Free_Sample_Handle(PRIORITY_MAX);
 
-    if (handle < MAX_SAMPLE_TRACKERS) {
+    if (handle >= 0 && handle < MAX_SAMPLE_TRACKERS) {
         SampleTrackerType* st = &LockedData.SampleTracker[handle];
         st->IsScore = true;
         st->FilePending = 0;
@@ -547,6 +551,7 @@ int File_Stream_Sample_Vol(char const* filename, int volume, bool real_time_star
         return handle;
     }
 
+    Close_File(fh);
     return INVALID_AUDIO_HANDLE;
 }
 
@@ -806,7 +811,7 @@ void Sound_End()
 
 void Stop_Sample(int index)
 {
-    if (LockedData.DigiHandle != INVALID_AUDIO_HANDLE && index < MAX_SAMPLE_TRACKERS && !AudioDone) {
+    if (LockedData.DigiHandle != INVALID_AUDIO_HANDLE && index >= 0 && index < MAX_SAMPLE_TRACKERS && !AudioDone) {
         SampleTrackerType* st = &LockedData.SampleTracker[index];
 
         if (st->Active || st->Loading) {
@@ -916,7 +921,12 @@ static int Play_Sample_Handle(const void* sample, int priority, int volume, sign
             return INVALID_AUDIO_HANDLE;
         }
 
-        if (id == INVALID_AUDIO_HANDLE) {
+        if (id < 0 || id >= MAX_SAMPLE_TRACKERS) {
+            return INVALID_AUDIO_HANDLE;
+        }
+
+        if (!Start_Primary_Sound_Buffer(false)) {
+            //CCDebugString("Play_Sample_Handle - Can't start primary buffer!");
             return INVALID_AUDIO_HANDLE;
         }
 
