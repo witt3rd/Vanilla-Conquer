@@ -18,6 +18,7 @@
 #include "wwkeyboard.h"
 #include "wwmouse.h"
 #include "settings.h"
+#include "paths.h"
 #include "debugstring.h"
 
 #include <SDL.h>
@@ -25,7 +26,9 @@
 #include <vulkan/vulkan.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -181,6 +184,11 @@ static const uint32_t kPaletteFragSpv[] = {
     0x0000001b,0x0000002d,0x000100fd,0x00010038
 };
 
+// Embedded SPIR-V for Native-4K Ultra Menu PBR + Particle + CRT Shader
+static const uint32_t kUltraMenuFragSpv[] = {
+#include "shaders/ultra_menu_frag_spv.inc"
+};
+
 /*=========================================================================*/
 /* Vulkan 1.3 Presentation State & Double-Buffered Staging Ring            */
 /*=========================================================================*/
@@ -190,6 +198,27 @@ struct PaletteUBOData
 {
     float colors[256][4];
 };
+
+struct UltraMenuUBOData
+{
+    float params0[4];          // x=time_sec, y=mouse_u, z=mouse_v, w=aspect
+    float params1[4];          // x=btn_count, y=cursor_visible, z=mouse_down, w=intro_fade
+    float btn_rect[8][4];      // u0, v0, u1, v1
+    float btn_state[8][4];     // hover_anim, selected, pressed, char_len
+    uint32_t btn_chars[16][4]; // 32 ASCII bytes per button (2 uvec4s each)
+    uint32_t ver_chars[2][4];  // 32 ASCII bytes for VersionText
+    float ver_info[4];         // x=ver_len, y=reserved, z=reserved, w=reserved
+};
+
+struct UltraMenuRuntimeState
+{
+    bool active{false};
+    UltraMenuUBOData ubo{};
+    float smoothHover[8]{};
+    std::chrono::steady_clock::time_point startTime{std::chrono::steady_clock::now()};
+};
+
+static UltraMenuRuntimeState ultraMenuState;
 
 struct VulkanFrameResources
 {
@@ -203,6 +232,9 @@ struct VulkanFrameResources
     VkBuffer paletteBuffer{VK_NULL_HANDLE};
     VkDeviceMemory paletteMemory{VK_NULL_HANDLE};
     void* paletteMapped{nullptr};
+    VkBuffer menuUboBuffer{VK_NULL_HANDLE};
+    VkDeviceMemory menuUboMemory{VK_NULL_HANDLE};
+    void* menuUboMapped{nullptr};
     VkDescriptorSet descriptorSet{VK_NULL_HANDLE};
 };
 
@@ -239,13 +271,24 @@ struct VulkanBackendContext
     VkSampler fbSampler{VK_NULL_HANDLE};
     bool fbLayoutInitialized{false};
 
-    // Descriptors & Graphics Pipeline
+    // Ultra Menu 4K RGBA Texture & Linear Sampler
+    bool menuTexLoaded{false};
+    uint32_t menuTexWidth{0};
+    uint32_t menuTexHeight{0};
+    VkImage menuImage{VK_NULL_HANDLE};
+    VkDeviceMemory menuMemory{VK_NULL_HANDLE};
+    VkImageView menuImageView{VK_NULL_HANDLE};
+    VkSampler menuSampler{VK_NULL_HANDLE};
+
+    // Descriptors & Graphics Pipelines
     VkDescriptorSetLayout descriptorSetLayout{VK_NULL_HANDLE};
     VkDescriptorPool descriptorPool{VK_NULL_HANDLE};
     VkPipelineLayout pipelineLayout{VK_NULL_HANDLE};
     VkShaderModule vertShader{VK_NULL_HANDLE};
     VkShaderModule fragShader{VK_NULL_HANDLE};
+    VkShaderModule ultraMenuFragShader{VK_NULL_HANDLE};
     VkPipeline presentPipeline{VK_NULL_HANDLE};
+    VkPipeline ultraMenuPipeline{VK_NULL_HANDLE};
 
     // Synchronization & Frame Ring
     VkSemaphore timelineSemaphore{VK_NULL_HANDLE};
@@ -323,6 +366,199 @@ static bool Create_Buffer(VkDeviceSize size,
             *outMapped = nullptr;
         }
     }
+    return true;
+}
+
+static void Destroy_Menu_Texture()
+{
+    if (!vkCtx.device) return;
+    if (vkCtx.menuImageView) {
+        vkDestroyImageView(vkCtx.device, vkCtx.menuImageView, nullptr);
+        vkCtx.menuImageView = VK_NULL_HANDLE;
+    }
+    if (vkCtx.menuImage) {
+        vkDestroyImage(vkCtx.device, vkCtx.menuImage, nullptr);
+        vkCtx.menuImage = VK_NULL_HANDLE;
+    }
+    if (vkCtx.menuMemory) {
+        vkFreeMemory(vkCtx.device, vkCtx.menuMemory, nullptr);
+        vkCtx.menuMemory = VK_NULL_HANDLE;
+    }
+    vkCtx.menuTexLoaded = false;
+    vkCtx.menuTexWidth = 0;
+    vkCtx.menuTexHeight = 0;
+}
+
+static bool Ensure_Menu_Texture()
+{
+    if (!vkCtx.initialized) return false;
+    if (vkCtx.menuImageView != VK_NULL_HANDLE) return true;
+
+    std::vector<std::string> candidates;
+    if (Paths.Data_Path() && Paths.Data_Path()[0] != '\0') {
+        candidates.push_back(std::string(Paths.Data_Path()) + "/menu_ultra.rgba");
+    }
+    candidates.push_back("share/vanillatd/menu_ultra.rgba");
+    candidates.push_back("../share/vanillatd/menu_ultra.rgba");
+    candidates.push_back("/home/dt/src/ext/Vanilla-Conquer/share/vanillatd/menu_ultra.rgba");
+
+    FILE* fp = nullptr;
+    for (const auto& path : candidates) {
+        fp = std::fopen(path.c_str(), "rb");
+        if (fp) break;
+    }
+
+    uint32_t texW = 1, texH = 1;
+    std::vector<uint8_t> pixels(4, 0);
+    bool loadedRealAsset = false;
+
+    if (fp) {
+        uint32_t hdr[4]{};
+        if (std::fread(hdr, sizeof(uint32_t), 4, fp) == 4 && hdr[0] == 0x554D4343u && hdr[1] > 0 && hdr[2] > 0) {
+            texW = hdr[1];
+            texH = hdr[2];
+            size_t totalBytes = static_cast<size_t>(texW) * static_cast<size_t>(texH) * 4u;
+            pixels.resize(totalBytes);
+            if (std::fread(pixels.data(), 1, totalBytes, fp) == totalBytes) {
+                loadedRealAsset = true;
+            } else {
+                texW = 1;
+                texH = 1;
+                pixels.assign(4, 0);
+            }
+        }
+        std::fclose(fp);
+    }
+
+    VkImageCreateInfo imgInfo{};
+    imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imgInfo.imageType = VK_IMAGE_TYPE_2D;
+    imgInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imgInfo.extent.width = texW;
+    imgInfo.extent.height = texH;
+    imgInfo.extent.depth = 1;
+    imgInfo.mipLevels = 1;
+    imgInfo.arrayLayers = 1;
+    imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imgInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    if (vkCreateImage(vkCtx.device, &imgInfo, nullptr, &vkCtx.menuImage) != VK_SUCCESS) {
+        return false;
+    }
+
+    VkMemoryRequirements memReqs{};
+    vkGetImageMemoryRequirements(vkCtx.device, vkCtx.menuImage, &memReqs);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = Find_Memory_Type(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (allocInfo.memoryTypeIndex == UINT32_MAX ||
+        vkAllocateMemory(vkCtx.device, &allocInfo, nullptr, &vkCtx.menuMemory) != VK_SUCCESS) {
+        Destroy_Menu_Texture();
+        return false;
+    }
+
+    vkBindImageMemory(vkCtx.device, vkCtx.menuImage, vkCtx.menuMemory, 0);
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = vkCtx.menuImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    if (vkCreateImageView(vkCtx.device, &viewInfo, nullptr, &vkCtx.menuImageView) != VK_SUCCESS) {
+        Destroy_Menu_Texture();
+        return false;
+    }
+
+    // Upload pixel data via one-shot staging buffer
+    VkBuffer uploadBuf = VK_NULL_HANDLE;
+    VkDeviceMemory uploadMem = VK_NULL_HANDLE;
+    void* uploadMapped = nullptr;
+    if (!Create_Buffer(pixels.size(),
+                       VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                       uploadBuf,
+                       uploadMem,
+                       &uploadMapped)) {
+        Destroy_Menu_Texture();
+        return false;
+    }
+    std::memcpy(uploadMapped, pixels.data(), pixels.size());
+    vkUnmapMemory(vkCtx.device, uploadMem);
+
+    VkCommandBuffer cmd = vkCtx.frames[0].commandBuffer;
+    vkResetCommandPool(vkCtx.device, vkCtx.frames[0].commandPool, 0);
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &beginInfo);
+
+    VkImageMemoryBarrier2 toTransfer{};
+    toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    toTransfer.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+    toTransfer.srcAccessMask = 0;
+    toTransfer.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    toTransfer.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    toTransfer.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    toTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toTransfer.image = vkCtx.menuImage;
+    toTransfer.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+    VkDependencyInfo dep1{};
+    dep1.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dep1.imageMemoryBarrierCount = 1;
+    dep1.pImageMemoryBarriers = &toTransfer;
+    vkCmdPipelineBarrier2(cmd, &dep1);
+
+    VkBufferImageCopy copyRegion{};
+    copyRegion.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copyRegion.imageExtent = {texW, texH, 1};
+    vkCmdCopyBufferToImage(cmd, uploadBuf, vkCtx.menuImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
+
+    VkImageMemoryBarrier2 toShader{};
+    toShader.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    toShader.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    toShader.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    toShader.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    toShader.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    toShader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toShader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toShader.image = vkCtx.menuImage;
+    toShader.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+    VkDependencyInfo dep2{};
+    dep2.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dep2.imageMemoryBarrierCount = 1;
+    dep2.pImageMemoryBarriers = &toShader;
+    vkCmdPipelineBarrier2(cmd, &dep2);
+
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(vkCtx.graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(vkCtx.graphicsQueue);
+
+    vkDestroyBuffer(vkCtx.device, uploadBuf, nullptr);
+    vkFreeMemory(vkCtx.device, uploadMem, nullptr);
+
+    vkCtx.menuTexLoaded = loadedRealAsset;
+    vkCtx.menuTexWidth = texW;
+    vkCtx.menuTexHeight = texH;
     return true;
 }
 
@@ -447,7 +683,17 @@ static bool Ensure_Framebuffer_Texture(uint32_t w, uint32_t h)
         palDesc.offset = 0;
         palDesc.range = sizeof(PaletteUBOData);
 
-        VkWriteDescriptorSet writes[2]{};
+        VkDescriptorImageInfo menuImgDesc{};
+        menuImgDesc.sampler = vkCtx.menuSampler ? vkCtx.menuSampler : vkCtx.fbSampler;
+        menuImgDesc.imageView = vkCtx.menuImageView ? vkCtx.menuImageView : vkCtx.fbImageView;
+        menuImgDesc.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkDescriptorBufferInfo menuUboDesc{};
+        menuUboDesc.buffer = fr.menuUboBuffer;
+        menuUboDesc.offset = 0;
+        menuUboDesc.range = sizeof(UltraMenuUBOData);
+
+        VkWriteDescriptorSet writes[4]{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = fr.descriptorSet;
         writes[0].dstBinding = 0;
@@ -462,7 +708,21 @@ static bool Ensure_Framebuffer_Texture(uint32_t w, uint32_t h)
         writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         writes[1].pBufferInfo = &palDesc;
 
-        vkUpdateDescriptorSets(vkCtx.device, 2, writes, 0, nullptr);
+        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet = fr.descriptorSet;
+        writes[2].dstBinding = 2;
+        writes[2].descriptorCount = 1;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[2].pImageInfo = &menuImgDesc;
+
+        writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[3].dstSet = fr.descriptorSet;
+        writes[3].dstBinding = 3;
+        writes[3].descriptorCount = 1;
+        writes[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[3].pBufferInfo = &menuUboDesc;
+
+        vkUpdateDescriptorSets(vkCtx.device, 4, writes, 0, nullptr);
     }
 
     return true;
@@ -647,6 +907,10 @@ static bool Create_Present_Pipeline()
         vkDestroyPipeline(vkCtx.device, vkCtx.presentPipeline, nullptr);
         vkCtx.presentPipeline = VK_NULL_HANDLE;
     }
+    if (vkCtx.ultraMenuPipeline) {
+        vkDestroyPipeline(vkCtx.device, vkCtx.ultraMenuPipeline, nullptr);
+        vkCtx.ultraMenuPipeline = VK_NULL_HANDLE;
+    }
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -725,8 +989,17 @@ static bool Create_Present_Pipeline()
     pipeInfo.layout = vkCtx.pipelineLayout;
     pipeInfo.renderPass = VK_NULL_HANDLE;
 
-    return vkCreateGraphicsPipelines(vkCtx.device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &vkCtx.presentPipeline) ==
-           VK_SUCCESS;
+    if (vkCreateGraphicsPipelines(vkCtx.device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &vkCtx.presentPipeline) !=
+        VK_SUCCESS) {
+        return false;
+    }
+
+    if (vkCtx.ultraMenuFragShader) {
+        stages[1].module = vkCtx.ultraMenuFragShader;
+        vkCreateGraphicsPipelines(vkCtx.device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &vkCtx.ultraMenuPipeline);
+    }
+
+    return true;
 }
 
 static bool Initialize_Vulkan_Backend(int gameW, int gameH)
@@ -852,8 +1125,21 @@ static bool Initialize_Vulkan_Backend(int gameW, int gameH)
         return false;
     }
 
-    // Descriptor Set Layout (binding 0: usampler2D, binding 1: PaletteUBO)
-    VkDescriptorSetLayoutBinding bindings[2]{};
+    // Create linear sampler for Ultra Menu 4K RGBA texture & HUD font atlas
+    VkSamplerCreateInfo menuSampInfo{};
+    menuSampInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    menuSampInfo.magFilter = VK_FILTER_LINEAR;
+    menuSampInfo.minFilter = VK_FILTER_LINEAR;
+    menuSampInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    menuSampInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    menuSampInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    menuSampInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    if (vkCreateSampler(vkCtx.device, &menuSampInfo, nullptr, &vkCtx.menuSampler) != VK_SUCCESS) {
+        return false;
+    }
+
+    // Descriptor Set Layout (binding 0: usampler2D, binding 1: PaletteUBO, binding 2: sampler2D, binding 3: UltraMenuUBO)
+    VkDescriptorSetLayoutBinding bindings[4]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[0].descriptorCount = 1;
@@ -864,9 +1150,19 @@ static bool Initialize_Vulkan_Backend(int gameW, int gameH)
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    bindings[3].binding = 3;
+    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[3].descriptorCount = 1;
+    bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
     VkDescriptorSetLayoutCreateInfo dslInfo{};
     dslInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    dslInfo.bindingCount = 2;
+    dslInfo.bindingCount = 4;
     dslInfo.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(vkCtx.device, &dslInfo, nullptr, &vkCtx.descriptorSetLayout) != VK_SUCCESS) {
         return false;
@@ -874,9 +1170,9 @@ static bool Initialize_Vulkan_Backend(int gameW, int gameH)
 
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = kMaxFramesInFlight;
+    poolSizes[0].descriptorCount = kMaxFramesInFlight * 2;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[1].descriptorCount = kMaxFramesInFlight;
+    poolSizes[1].descriptorCount = kMaxFramesInFlight * 2;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -923,6 +1219,12 @@ static bool Initialize_Vulkan_Backend(int gameW, int gameH)
     if (vkCreateShaderModule(vkCtx.device, &fragModInfo, nullptr, &vkCtx.fragShader) != VK_SUCCESS) {
         return false;
     }
+
+    VkShaderModuleCreateInfo menuFragModInfo{};
+    menuFragModInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    menuFragModInfo.codeSize = sizeof(kUltraMenuFragSpv);
+    menuFragModInfo.pCode = kUltraMenuFragSpv;
+    vkCreateShaderModule(vkCtx.device, &menuFragModInfo, nullptr, &vkCtx.ultraMenuFragShader);
 
     if (!Create_Present_Pipeline()) {
         return false;
@@ -975,9 +1277,19 @@ static bool Initialize_Vulkan_Backend(int gameW, int gameH)
                            &fr.paletteMapped)) {
             return false;
         }
+
+        if (!Create_Buffer(sizeof(UltraMenuUBOData),
+                           VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           fr.menuUboBuffer,
+                           fr.menuUboMemory,
+                           &fr.menuUboMapped)) {
+            return false;
+        }
     }
 
     vkCtx.initialized = true;
+    Ensure_Menu_Texture();
     Ensure_Framebuffer_Texture(static_cast<uint32_t>(gameW), static_cast<uint32_t>(gameH));
     return true;
 }
@@ -987,6 +1299,7 @@ static void Shutdown_Vulkan_Backend()
     if (vkCtx.device) {
         vkDeviceWaitIdle(vkCtx.device);
 
+        Destroy_Menu_Texture();
         Destroy_Framebuffer_Texture();
         Destroy_Swapchain();
 
@@ -1003,17 +1316,23 @@ static void Shutdown_Vulkan_Backend()
             if (fr.paletteMapped) vkUnmapMemory(vkCtx.device, fr.paletteMemory);
             if (fr.paletteBuffer) vkDestroyBuffer(vkCtx.device, fr.paletteBuffer, nullptr);
             if (fr.paletteMemory) vkFreeMemory(vkCtx.device, fr.paletteMemory, nullptr);
+            if (fr.menuUboMapped) vkUnmapMemory(vkCtx.device, fr.menuUboMemory);
+            if (fr.menuUboBuffer) vkDestroyBuffer(vkCtx.device, fr.menuUboBuffer, nullptr);
+            if (fr.menuUboMemory) vkFreeMemory(vkCtx.device, fr.menuUboMemory, nullptr);
             if (fr.imageAcquiredSemaphore) vkDestroySemaphore(vkCtx.device, fr.imageAcquiredSemaphore, nullptr);
             if (fr.commandPool) vkDestroyCommandPool(vkCtx.device, fr.commandPool, nullptr);
             fr = VulkanFrameResources{};
         }
 
+        if (vkCtx.ultraMenuPipeline) vkDestroyPipeline(vkCtx.device, vkCtx.ultraMenuPipeline, nullptr);
         if (vkCtx.presentPipeline) vkDestroyPipeline(vkCtx.device, vkCtx.presentPipeline, nullptr);
         if (vkCtx.vertShader) vkDestroyShaderModule(vkCtx.device, vkCtx.vertShader, nullptr);
         if (vkCtx.fragShader) vkDestroyShaderModule(vkCtx.device, vkCtx.fragShader, nullptr);
+        if (vkCtx.ultraMenuFragShader) vkDestroyShaderModule(vkCtx.device, vkCtx.ultraMenuFragShader, nullptr);
         if (vkCtx.pipelineLayout) vkDestroyPipelineLayout(vkCtx.device, vkCtx.pipelineLayout, nullptr);
         if (vkCtx.descriptorPool) vkDestroyDescriptorPool(vkCtx.device, vkCtx.descriptorPool, nullptr);
         if (vkCtx.descriptorSetLayout) vkDestroyDescriptorSetLayout(vkCtx.device, vkCtx.descriptorSetLayout, nullptr);
+        if (vkCtx.menuSampler) vkDestroySampler(vkCtx.device, vkCtx.menuSampler, nullptr);
         if (vkCtx.fbSampler) vkDestroySampler(vkCtx.device, vkCtx.fbSampler, nullptr);
 
         vkDestroyDevice(vkCtx.device, nullptr);
@@ -1085,15 +1404,19 @@ static void Compute_Letterbox_Rect(int out_w, int out_h, int game_w, int game_h,
 
     if (Settings.Video.Boxing) {
         float ar = static_cast<float>(gw) / static_cast<float>(gh);
-        size_t colonPos = Settings.Video.BoxingAspectRatio.find(":");
-        if (colonPos != std::string::npos) {
-            size_t arLen = Settings.Video.BoxingAspectRatio.length();
-            std::string arW = Settings.Video.BoxingAspectRatio.substr(0, colonPos);
-            std::string arH = Settings.Video.BoxingAspectRatio.substr(colonPos + 1, arLen - colonPos);
-            float w_val = std::stof(arW);
-            float h_val = std::stof(arH);
-            if (w_val > 0.0f && h_val > 0.0f) {
-                ar = w_val / h_val;
+        if (ultraMenuState.active && vkCtx.menuTexLoaded) {
+            ar = 2752.0f / 1536.0f;
+        } else {
+            size_t colonPos = Settings.Video.BoxingAspectRatio.find(":");
+            if (colonPos != std::string::npos) {
+                size_t arLen = Settings.Video.BoxingAspectRatio.length();
+                std::string arW = Settings.Video.BoxingAspectRatio.substr(0, colonPos);
+                std::string arH = Settings.Video.BoxingAspectRatio.substr(colonPos + 1, arLen - colonPos);
+                float w_val = std::stof(arW);
+                float h_val = std::stof(arH);
+                if (w_val > 0.0f && h_val > 0.0f) {
+                    ar = w_val / h_val;
+                }
             }
         }
 
@@ -1160,7 +1483,11 @@ static void Execute_Pass2_SoftwareFramebuffer(VkCommandBuffer cmd, uint32_t imag
     scissor.extent = {static_cast<uint32_t>(vw), static_cast<uint32_t>(vh)};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vkCtx.presentPipeline);
+    VkPipeline activePipe =
+        (ultraMenuState.active && vkCtx.menuTexLoaded && vkCtx.ultraMenuPipeline != VK_NULL_HANDLE)
+            ? vkCtx.ultraMenuPipeline
+            : vkCtx.presentPipeline;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipe);
     vkCmdBindDescriptorSets(
         cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vkCtx.pipelineLayout, 0, 1, &vkCtx.frames[frameIdx].descriptorSet, 0, nullptr);
     vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -1520,6 +1847,29 @@ public:
         // Copy current 256-entry palette into per-frame UBO
         if (fr.paletteMapped) {
             std::memcpy(fr.paletteMapped, &vkCtx.currentPalette, sizeof(PaletteUBOData));
+        }
+
+        // Update Ultra Menu live UBO (time, mouse UV, button states, and labels)
+        if (fr.menuUboMapped) {
+            auto now = std::chrono::steady_clock::now();
+            float elapsed = std::chrono::duration<float>(now - ultraMenuState.startTime).count();
+            int mx = 0, my = 0;
+            Get_Video_Mouse(mx, my);
+            int gw = hwcursor.GameW > 0 ? hwcursor.GameW : 640;
+            int gh = hwcursor.GameH > 0 ? hwcursor.GameH : 400;
+            Uint32 mButtons = SDL_GetMouseState(nullptr, nullptr);
+
+            ultraMenuState.ubo.params0[0] = elapsed;
+            ultraMenuState.ubo.params0[1] = static_cast<float>(mx) / static_cast<float>(gw);
+            ultraMenuState.ubo.params0[2] = static_cast<float>(my) / static_cast<float>(gh);
+            ultraMenuState.ubo.params0[3] =
+                vkCtx.swapchainHeight > 0
+                    ? static_cast<float>(vkCtx.swapchainWidth) / static_cast<float>(vkCtx.swapchainHeight)
+                    : 1.7778f;
+            ultraMenuState.ubo.params1[1] = (!Get_Mouse_State()) ? 1.0f : 0.0f;
+            ultraMenuState.ubo.params1[2] = (mButtons & SDL_BUTTON(SDL_BUTTON_LEFT)) ? 1.0f : 0.0f;
+
+            std::memcpy(fr.menuUboMapped, &ultraMenuState.ubo, sizeof(UltraMenuUBOData));
         }
 
         uint32_t imageIndex = 0;
@@ -2005,4 +2355,59 @@ void Video_Render_Frame()
     if (frontSurface) {
         frontSurface->RenderSurface();
     }
+}
+
+static void Pack_ASCII_To_UVec4_Pair(const char* str, uint32_t outWords[2][4], int& outLen)
+{
+    std::memset(outWords, 0, sizeof(uint32_t) * 8);
+    outLen = 0;
+    if (!str) return;
+    while (str[outLen] != '\0' && outLen < 32) {
+        uint8_t ch = static_cast<uint8_t>(str[outLen]);
+        int wordIdx = outLen >> 2;
+        int byteShift = (outLen & 3) * 8;
+        outWords[wordIdx >> 2][wordIdx & 3] |= (static_cast<uint32_t>(ch) << byteShift);
+        outLen++;
+    }
+}
+
+void Video_Set_Ultra_Menu_State(bool active,
+                                const UltraMenuButtonInfo* buttons,
+                                int button_count,
+                                const char* version_text)
+{
+    if (active && !ultraMenuState.active) {
+        ultraMenuState.startTime = std::chrono::steady_clock::now();
+    }
+    ultraMenuState.active = active;
+    if (!active) {
+        return;
+    }
+
+    int count = std::max(0, std::min(button_count, 8));
+    ultraMenuState.ubo.params1[0] = static_cast<float>(count);
+    ultraMenuState.ubo.params1[3] = 1.0f;
+
+    for (int i = 0; i < count && buttons != nullptr; ++i) {
+        const UltraMenuButtonInfo& b = buttons[i];
+        ultraMenuState.ubo.btn_rect[i][0] = b.x;
+        ultraMenuState.ubo.btn_rect[i][1] = b.y;
+        ultraMenuState.ubo.btn_rect[i][2] = b.x + b.w;
+        ultraMenuState.ubo.btn_rect[i][3] = b.y + b.h;
+
+        float targetHover = b.hover;
+        ultraMenuState.smoothHover[i] += (targetHover - ultraMenuState.smoothHover[i]) * 0.22f;
+
+        int charLen = 0;
+        Pack_ASCII_To_UVec4_Pair(b.label, &ultraMenuState.ubo.btn_chars[i * 2], charLen);
+
+        ultraMenuState.ubo.btn_state[i][0] = ultraMenuState.smoothHover[i];
+        ultraMenuState.ubo.btn_state[i][1] = b.selected ? 1.0f : 0.0f;
+        ultraMenuState.ubo.btn_state[i][2] = b.pressed ? 1.0f : 0.0f;
+        ultraMenuState.ubo.btn_state[i][3] = static_cast<float>(charLen);
+    }
+
+    int verLen = 0;
+    Pack_ASCII_To_UVec4_Pair(version_text, ultraMenuState.ubo.ver_chars, verLen);
+    ultraMenuState.ubo.ver_info[0] = static_cast<float>(verLen);
 }

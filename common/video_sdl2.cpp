@@ -911,3 +911,14 @@ VideoSurface* Video::CreateSurface(int w, int h, GBC_Enum flags)
 {
     return new VideoSurfaceSDL2(w, h, flags);
 }
+
+void Video_Set_Ultra_Menu_State(bool active,
+                                const UltraMenuButtonInfo* buttons,
+                                int button_count,
+                                const char* version_text)
+{
+    (void)active;
+    (void)buttons;
+    (void)button_count;
+    (void)version_text;
+}

@@ -101,4 +101,21 @@ unsigned Get_Video_Hardware_Capabilities();
 void Wait_Vert_Blank();
 void Set_DD_Palette(void* palette);
 
+struct UltraMenuButtonInfo
+{
+    float x;
+    float y;
+    float w;
+    float h;
+    const char* label;
+    float hover;
+    bool selected;
+    bool pressed;
+};
+
+void Video_Set_Ultra_Menu_State(bool active,
+                                const UltraMenuButtonInfo* buttons = nullptr,
+                                int button_count = 0,
+                                const char* version_text = nullptr);
+
 #endif // VIDEO_H

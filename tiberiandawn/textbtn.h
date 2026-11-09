@@ -64,6 +64,10 @@ public:
     {
         PrintFlags = style;
     }
+    char const* Get_Text(void) const
+    {
+        return String;
+    }
 
 protected:
     virtual void Draw_Background(void);

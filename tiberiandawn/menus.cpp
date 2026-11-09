@@ -757,6 +757,30 @@ int Main_Menu(unsigned int timeout)
 #endif
     buttons[curbutton]->Turn_On();
 
+    // Align button hitboxes with the 4K Ultra Menu CRT terminal layout
+    int first_vis = 0;
+#ifdef NEWMENU
+    if (!expansions) {
+        first_vis = 1;
+    }
+    int total_btns = butt;
+#else
+    int total_btns = 5;
+#endif
+    int vis_count = total_btns - first_vis;
+    for (int vi = 0; vi < vis_count; ++vi) {
+        TextButtonClass* b = buttons[first_vis + vi];
+        bool is_exit = (vi == vis_count - 1);
+        float u0 = is_exit ? 0.4048f : 0.3208f;
+        float uw = is_exit ? 0.1777f : 0.3514f;
+        float v0 = (vis_count <= 5) ? (0.1080f + vi * 0.0762f) : (0.0950f + vi * 0.0660f);
+        float vh = (vis_count <= 5) ? 0.0488f : 0.0440f;
+        b->X = static_cast<int>(u0 * SeenBuff.Get_Width());
+        b->Y = static_cast<int>(v0 * SeenBuff.Get_Height());
+        b->Width = static_cast<int>(uw * SeenBuff.Get_Width());
+        b->Height = static_cast<int>(vh * SeenBuff.Get_Height());
+    }
+
     Keyboard->Clear();
 
     Fancy_Text_Print(TXT_NONE, 0, 0, CC_GREEN, TBLACK, TPF_CENTER | TPF_6PT_GRAD | TPF_USE_GRAD_PAL | TPF_NOSHADOW);
@@ -957,7 +981,39 @@ int Main_Menu(unsigned int timeout)
             break;
         }
 
-        Frame_Limiter();
+        // Synchronize live button hover/selection state with the native-4K Vulkan Ultra Menu renderer
+        {
+            int mx = Get_Mouse_X();
+            int my = Get_Mouse_Y();
+            UltraMenuButtonInfo ubtns[8]{};
+            float sw = static_cast<float>(SeenBuff.Get_Width() > 0 ? SeenBuff.Get_Width() : 640);
+            float sh = static_cast<float>(SeenBuff.Get_Height() > 0 ? SeenBuff.Get_Height() : 400);
+
+            for (int vi = 0; vi < vis_count && vi < 8; ++vi) {
+                int bi = first_vis + vi;
+                TextButtonClass* b = buttons[bi];
+                bool mouse_over = (mx >= b->X && mx < b->X + b->Width && my >= b->Y && my < b->Y + b->Height);
+                if (mouse_over && curbutton != bi) {
+                    buttons[curbutton]->Turn_Off();
+                    buttons[curbutton]->Flag_To_Redraw();
+                    curbutton = bi;
+                    buttons[curbutton]->Turn_On();
+                    buttons[curbutton]->Flag_To_Redraw();
+                }
+                ubtns[vi].x = static_cast<float>(b->X) / sw;
+                ubtns[vi].y = static_cast<float>(b->Y) / sh;
+                ubtns[vi].w = static_cast<float>(b->Width) / sw;
+                ubtns[vi].h = static_cast<float>(b->Height) / sh;
+                ubtns[vi].label = b->Get_Text();
+                ubtns[vi].hover = mouse_over ? 1.0f : (curbutton == bi ? 0.65f : 0.0f);
+                ubtns[vi].selected = (curbutton == bi);
+                ubtns[vi].pressed = (b->IsPressed != 0);
+            }
+            Video_Set_Ultra_Menu_State(true, ubtns, vis_count, VersionText);
+        }
+
+        Frame_Limiter(FrameLimitFlags::FL_FORCE_RENDER);
     }
+    Video_Set_Ultra_Menu_State(false);
     return (retval);
 }
