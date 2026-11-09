@@ -1071,6 +1071,48 @@ static void Execute_Pass1_Scene3D(VkCommandBuffer cmd, uint32_t imageIndex)
     vkCmdEndRendering(cmd);
 }
 
+static void Compute_Letterbox_Rect(int out_w, int out_h, int game_w, int game_h, SDL_Rect& dst)
+{
+    int gw = game_w > 0 ? game_w : 640;
+    int gh = game_h > 0 ? game_h : 400;
+    if (out_w <= 0 || out_h <= 0) {
+        dst.x = 0;
+        dst.y = 0;
+        dst.w = gw;
+        dst.h = gh;
+        return;
+    }
+
+    if (Settings.Video.Boxing) {
+        float ar = static_cast<float>(gw) / static_cast<float>(gh);
+        size_t colonPos = Settings.Video.BoxingAspectRatio.find(":");
+        if (colonPos != std::string::npos) {
+            size_t arLen = Settings.Video.BoxingAspectRatio.length();
+            std::string arW = Settings.Video.BoxingAspectRatio.substr(0, colonPos);
+            std::string arH = Settings.Video.BoxingAspectRatio.substr(colonPos + 1, arLen - colonPos);
+            float w_val = std::stof(arW);
+            float h_val = std::stof(arH);
+            if (w_val > 0.0f && h_val > 0.0f) {
+                ar = w_val / h_val;
+            }
+        }
+
+        dst.w = out_w;
+        dst.h = static_cast<int>(dst.w / ar);
+        if (dst.h > out_h) {
+            dst.h = out_h;
+            dst.w = static_cast<int>(dst.h * ar);
+        }
+        dst.x = (out_w - dst.w) / 2;
+        dst.y = (out_h - dst.h) / 2;
+    } else {
+        dst.x = 0;
+        dst.y = 0;
+        dst.w = out_w;
+        dst.h = out_h;
+    }
+}
+
 // Pass 2: Software Framebuffer Presentation Pass (letterboxed 16:10 / 4:3 quad with GPU palette lookup)
 static void Execute_Pass2_SoftwareFramebuffer(VkCommandBuffer cmd, uint32_t imageIndex, uint32_t frameIdx)
 {
@@ -1092,10 +1134,17 @@ static void Execute_Pass2_SoftwareFramebuffer(VkCommandBuffer cmd, uint32_t imag
 
     vkCmdBeginRendering(cmd, &renderInfo);
 
-    int vx = std::max(0, render_dst.x);
-    int vy = std::max(0, render_dst.y);
-    int vw = render_dst.w > 0 ? render_dst.w : static_cast<int>(vkCtx.swapchainWidth);
-    int vh = render_dst.h > 0 ? render_dst.h : static_cast<int>(vkCtx.swapchainHeight);
+    SDL_Rect vk_dst{};
+    Compute_Letterbox_Rect(static_cast<int>(vkCtx.swapchainWidth),
+                           static_cast<int>(vkCtx.swapchainHeight),
+                           hwcursor.GameW,
+                           hwcursor.GameH,
+                           vk_dst);
+
+    int vx = std::max(0, vk_dst.x);
+    int vy = std::max(0, vk_dst.y);
+    int vw = vk_dst.w > 0 ? vk_dst.w : static_cast<int>(vkCtx.swapchainWidth);
+    int vh = vk_dst.h > 0 ? vk_dst.h : static_cast<int>(vkCtx.swapchainHeight);
 
     VkViewport viewport{};
     viewport.x = static_cast<float>(vx);
@@ -1396,7 +1445,9 @@ public:
             return;
         }
 
-        if (cur_w != last_out_w || cur_h != last_out_h) {
+        if (cur_w != last_out_w || cur_h != last_out_h ||
+            cur_w != static_cast<int>(vkCtx.swapchainWidth) ||
+            cur_h != static_cast<int>(vkCtx.swapchainHeight)) {
             Update_HWCursor_Settings();
             vkCtx.requireSwapchainRecreate = true;
         }
@@ -1407,6 +1458,7 @@ public:
             if (!Create_Swapchain(static_cast<uint32_t>(cur_w), static_cast<uint32_t>(cur_h))) {
                 return;
             }
+            Update_HWCursor_Settings();
             vkCtx.requireSwapchainRecreate = false;
         }
 
@@ -1867,9 +1919,15 @@ void Get_Video_Mouse(int& x, int& y)
         y = static_cast<int>(hwcursor.Y);
     } else {
         SDL_GetMouseState(&x, &y);
-        if (render_dst.w > 0 && render_dst.h > 0) {
-            x = (x - render_dst.x) * hwcursor.GameW / render_dst.w;
-            y = (y - render_dst.y) * hwcursor.GameH / render_dst.h;
+        int win_w = 0, win_h = 0;
+        if (window) {
+            SDL_GetWindowSize(window, &win_w, &win_h);
+        }
+        SDL_Rect mouse_dst{};
+        Compute_Letterbox_Rect(win_w, win_h, hwcursor.GameW, hwcursor.GameH, mouse_dst);
+        if (mouse_dst.w > 0 && mouse_dst.h > 0) {
+            x = (x - mouse_dst.x) * hwcursor.GameW / mouse_dst.w;
+            y = (y - mouse_dst.y) * hwcursor.GameH / mouse_dst.h;
         } else {
             float scale_x = 1.0f, scale_y = 1.0f;
             Get_Video_Scale(scale_x, scale_y);

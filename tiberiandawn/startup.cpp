@@ -287,6 +287,7 @@ int main(int argc, char** argv)
         ** Set the options as requested by the ccsetup program
         */
         Read_Setup_Options(&cfile);
+        auto saved_video_settings = Settings.Video;
         Apply_Video_Resolution_Settings();
 
         CCDebugString("C&C95 - Creating main window.\n");
@@ -400,8 +401,8 @@ int main(int argc, char** argv)
         }
 #endif
 
-        SeenBuff.Attach(&VisiblePage, 0, 0, GBUFF_INIT_WIDTH, GBUFF_INIT_HEIGHT);
-        HidPage.Attach(&HiddenPage, 0, 0, GBUFF_INIT_WIDTH, GBUFF_INIT_HEIGHT);
+        SeenBuff.Attach(&VisiblePage, 0, 0, ScreenWidth, ScreenHeight);
+        HidPage.Attach(&HiddenPage, 0, 0, ScreenWidth, ScreenHeight);
 
         CCDebugString("C&C95 - Adjusting variables for resolution.\n");
         Options.Adjust_Variables_For_Resolution();
@@ -459,6 +460,7 @@ int main(int argc, char** argv)
         /*
         ** Save settings if they were changed during gameplay.
         */
+        Settings.Video = saved_video_settings;
         ini.Load(cfile);
         Settings.Save(ini);
         ini.Save(cfile);

@@ -349,7 +349,7 @@ bool Init_Game(int, char*[])
         */
 
         if (Get_Resolution_Factor()) {
-            new MFCD("LOCAL.MIX");
+            MFCD* local_mix = new MFCD("LOCAL.MIX");
             if (MFCD::Cache("LOCAL.MIX")) {
                 void const* dos_ptr = MFCD::Retrieve("GRAD6FNT.FNT");
                 if (dos_ptr) {
@@ -360,7 +360,7 @@ bool Init_Game(int, char*[])
                     memcpy(dos_grad6fnt, dos_ptr, dos_len);
                 }
             }
-            MFCD::Free("LOCAL.MIX");
+            delete local_mix;
             new MFCD("CCLOCAL.MIX"); // Cached.
             MFCD::Cache("CCLOCAL.MIX");
         } else {
@@ -1878,10 +1878,10 @@ bool Parse_Command_Line(int argc, char* argv[])
                  "  -STEALTH  = Hide multiplayer names (\"Boss mode\")\r\n"
                  "  -MESSAGES = Allow messages from outside this game.\r\n"
                  "  -o        = Enable compatability with version 1.07.\r\n"
-                 "  -1k/-1080p= 1K Full HD (1920x1080 window, 960x540 2x tactical view)\r\n"
-                 "  -2k/-1440p= 2K QHD (2560x1440 window, 1280x720 2x tactical view)\r\n"
-                 "  -4k/-2160p= 4K UHD (3840x2160 window, 1280x720 3x tactical view)\r\n"
-                 "  -scale N  = Integer pixel scale factor (1..8) for 1K/2K/4K/window\r\n"
+                 "  -1k/-1080p= 1K Full HD (1920x1080 upscaled & letterboxed)\r\n"
+                 "  -2k/-1440p= 2K QHD (2560x1440 upscaled & letterboxed)\r\n"
+                 "  -4k/-2160p= 4K UHD (3840x2160 upscaled & letterboxed)\r\n"
+                 "  -scale N  = Unlock tactical view with integer pixel scale (1..8)\r\n"
                  "  -native   = 1:1 native internal resolution (equivalent to -scale 1)\r\n"
                  "  -res WxH  = Explicit internal tactical resolution (e.g. -res 1920x1080)\r\n"
                  "  -fullscreen / -window = Force fullscreen or windowed mode\r\n"
@@ -2099,17 +2099,17 @@ bool Parse_Command_Line(int argc, char* argv[])
         */
         if (stricmp(string, "-1K") == 0 || stricmp(string, "-1080P") == 0 || stricmp(string, "-FHD") == 0) {
             extern void Set_CLI_Video_Preset(int w, int h, int def_scale);
-            Set_CLI_Video_Preset(1920, 1080, 2);
+            Set_CLI_Video_Preset(1920, 1080, 0);
             continue;
         }
         if (stricmp(string, "-2K") == 0 || stricmp(string, "-1440P") == 0 || stricmp(string, "-QHD") == 0) {
             extern void Set_CLI_Video_Preset(int w, int h, int def_scale);
-            Set_CLI_Video_Preset(2560, 1440, 2);
+            Set_CLI_Video_Preset(2560, 1440, 0);
             continue;
         }
         if (stricmp(string, "-4K") == 0 || stricmp(string, "-2160P") == 0 || stricmp(string, "-UHD") == 0) {
             extern void Set_CLI_Video_Preset(int w, int h, int def_scale);
-            Set_CLI_Video_Preset(3840, 2160, 3);
+            Set_CLI_Video_Preset(3840, 2160, 0);
             continue;
         }
         if (stricmp(string, "-NATIVE") == 0) {
@@ -2355,6 +2355,8 @@ void Apply_Video_Resolution_Settings(void)
     if (CLIVideo.HasPreset) {
         Settings.Video.WindowWidth = CLIVideo.TargetWidth;
         Settings.Video.WindowHeight = CLIVideo.TargetHeight;
+        Settings.Video.Boxing = true;
+        Settings.Video.BoxingAspectRatio = "16:10";
         if (!Settings.Video.Windowed) {
             Settings.Video.Width = CLIVideo.TargetWidth;
             Settings.Video.Height = CLIVideo.TargetHeight;
