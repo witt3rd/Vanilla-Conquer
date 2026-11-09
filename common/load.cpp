@@ -164,7 +164,13 @@ void* Load_Alloc_Data(char const* name, MemoryFlagType flags)
 void* Load_Alloc_Data(const FileClass& file)
 {
     void* ptr = 0;
+    if (!const_cast<FileClass&>(file).Is_Available()) {
+        return nullptr;
+    }
     int size = const_cast<FileClass&>(file).Size();
+    if (size <= 0) {
+        return nullptr;
+    }
 
     ptr = malloc(size);
     if (ptr) {

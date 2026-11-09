@@ -10,7 +10,7 @@ SettingsClass::SettingsClass()
     /*
     ** Mouse settings
     */
-    Mouse.RawInput = true;
+    Mouse.RawInput = false;
     Mouse.Sensitivity = 100;
     Mouse.ControllerEnabled = false;
     Mouse.ControllerPointerSpeed = 10;
@@ -19,9 +19,9 @@ SettingsClass::SettingsClass()
     /*
     ** Video settings
     */
-    Video.WindowWidth = 640;
-    Video.WindowHeight = 400;
-    Video.Windowed = false;
+    Video.WindowWidth = 1280;
+    Video.WindowHeight = 800;
+    Video.Windowed = true;
     Video.Width = 0;
     Video.Height = 0;
     Video.Boxing = true;

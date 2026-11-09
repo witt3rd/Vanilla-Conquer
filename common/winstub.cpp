@@ -60,6 +60,7 @@ void Load_Title_Screen(const char* name, GraphicViewPortClass* video_page, unsig
         DBG_ERROR("Title screen file %s do not have PCX or CPS extension", name);
     }
 
+    DBG_INFO("Load_Title_Screen('%s'): load_buffer=%p", name, (void*)load_buffer);
     if (load_buffer) {
         load_buffer->Blit(*video_page);
         delete load_buffer;

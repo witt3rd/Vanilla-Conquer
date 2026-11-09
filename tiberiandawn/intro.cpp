@@ -211,8 +211,12 @@ void Choose_Side(void)
                 Show_Mouse();
             }
         }
-        if (frame >= Get_Animation_Frame_Count(anim))
-            frame = 0;
+        if (anim) {
+            if (frame >= Get_Animation_Frame_Count(anim))
+                frame = 0;
+        } else {
+            endframe = frame;
+        }
         if (Keyboard->Check() && endframe == 255) {
             if ((Keyboard->Get() & 0x10FF) == KN_LMOUSE) {
                 if ((Keyboard->MouseQY > 48 * scale_factor) && (Keyboard->MouseQY < 150 * scale_factor)) {
@@ -221,18 +225,22 @@ void Choose_Side(void)
                         Whom = HOUSE_GOOD;
                         ScenPlayer = SCEN_PLAYER_GDI;
                         endframe = 0;
-                        speechhandle = Play_Sample(speechg);
-                        speechplaying = true;
-                        speech = speechg;
+                        if (speechg) {
+                            speechhandle = Play_Sample(speechg);
+                            speechplaying = true;
+                            speech = speechg;
+                        }
                     } else if ((Keyboard->MouseQX > 160 * scale_factor) && (Keyboard->MouseQX < 300 * scale_factor)) {
                         // Chose Nod
                         selection = 1;
-                        endframe = 14;
+                        endframe = anim ? 14 : frame;
                         Whom = HOUSE_BAD;
                         ScenPlayer = SCEN_PLAYER_NOD;
-                        speechhandle = Play_Sample(speechn);
-                        speechplaying = true;
-                        speech = speechn;
+                        if (speechn) {
+                            speechhandle = Play_Sample(speechn);
+                            speechplaying = true;
+                            speech = speechn;
+                        }
                     }
                 }
             }
@@ -249,6 +257,7 @@ void Choose_Side(void)
     Interpolate_2X_Scale(PseudoSeenBuff, &SeenBuff, "SIDES.PAL", Settings.Video.InterpolationMode);
     Keyboard->Clear();
     SysMemPage.Clear();
+    BreakoutAllowed = true;
 
     /*
     ** Skip the briefings if we're in special mode.

@@ -119,13 +119,25 @@ Uint32 SettingsPixelFormat()
 
 static void Update_HWCursor();
 
+static int last_out_w = 0;
+static int last_out_h = 0;
+
 static void Update_HWCursor_Settings()
 {
     /*
     ** Update mouse scaling settings.
     */
-    int win_w, win_h;
+    int win_w = 0, win_h = 0;
     SDL_GetRendererOutputSize(renderer, &win_w, &win_h);
+    if (win_w <= 0 || win_h <= 0) {
+        SDL_GetWindowSize(window, &win_w, &win_h);
+    }
+    if (win_w <= 0 || win_h <= 0) {
+        win_w = hwcursor.GameW > 0 ? hwcursor.GameW : 640;
+        win_h = hwcursor.GameH > 0 ? hwcursor.GameH : 400;
+    }
+    last_out_w = win_w;
+    last_out_h = win_h;
     hwcursor.ScaleX = win_w / (float)hwcursor.GameW;
     hwcursor.ScaleY = win_h / (float)hwcursor.GameH;
 
@@ -229,9 +241,11 @@ bool Set_Video_Mode(int w, int h, int bits_per_pixel)
         ** Native fullscreen if no proper width and height set.
         */
         if (Settings.Video.Width < w || Settings.Video.Height < h) {
-            win_w = Settings.Video.Width = 0;
-            win_h = Settings.Video.Height = 0;
-            win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+            win_w = w * 2;
+            win_h = h * 2;
+            Settings.Video.Width = 0;
+            Settings.Video.Height = 0;
+            win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_RESIZABLE;
         } else {
             win_w = Settings.Video.Width;
             win_h = Settings.Video.Height;
@@ -240,9 +254,11 @@ bool Set_Video_Mode(int w, int h, int bits_per_pixel)
     } else if (Settings.Video.WindowWidth > w || Settings.Video.WindowHeight > h) {
         win_w = Settings.Video.WindowWidth;
         win_h = Settings.Video.WindowHeight;
+        win_flags |= SDL_WINDOW_RESIZABLE;
     } else {
         Settings.Video.WindowWidth = win_w;
         Settings.Video.WindowHeight = win_h;
+        win_flags |= SDL_WINDOW_RESIZABLE;
     }
 
     window =
@@ -393,12 +409,13 @@ void Set_Video_Cursor_Clip(bool clipped)
     hwcursor.Clip = clipped;
 
     if (window) {
-        int relative;
+        int relative = 0;
 
         if (Settings.Video.Windowed) {
-            SDL_SetWindowGrab(window, hwcursor.Clip ? SDL_TRUE : SDL_FALSE);
+            bool grab = Settings.Mouse.RawInput && hwcursor.Clip;
+            SDL_SetWindowGrab(window, grab ? SDL_TRUE : SDL_FALSE);
             relative = SDL_SetRelativeMouseMode(
-                Settings.Mouse.ControllerEnabled || (Settings.Mouse.RawInput && hwcursor.Clip) ? SDL_TRUE : SDL_FALSE);
+                Settings.Mouse.ControllerEnabled || grab ? SDL_TRUE : SDL_FALSE);
 
             /*
             ** When grabbing with raw input, move in-game cursor where the real cursor was and vice versa.
@@ -414,7 +431,7 @@ void Set_Video_Cursor_Clip(bool clipped)
                 }
             }
         } else {
-            SDL_SetWindowGrab(window, SDL_TRUE);
+            SDL_SetWindowGrab(window, Settings.Mouse.RawInput ? SDL_TRUE : SDL_FALSE);
             relative = SDL_SetRelativeMouseMode(Settings.Mouse.RawInput ? SDL_TRUE : SDL_FALSE);
         }
 
@@ -427,7 +444,7 @@ void Set_Video_Cursor_Clip(bool clipped)
 
 void Move_Video_Mouse(float xrel, float yrel)
 {
-    if (Keyboard->Is_Gamepad_Active() || hwcursor.Clip || !Settings.Video.Windowed) {
+    if (Keyboard->Is_Gamepad_Active() || (Settings.Mouse.RawInput && (hwcursor.Clip || !Settings.Video.Windowed))) {
         hwcursor.X += xrel * (Settings.Mouse.Sensitivity / 100.0f);
         hwcursor.Y += yrel * (Settings.Mouse.Sensitivity / 100.0f);
     }
@@ -451,11 +468,20 @@ void Get_Video_Mouse(int& x, int& y)
         x = hwcursor.X;
         y = hwcursor.Y;
     } else {
-        float scale_x, scale_y;
-        Get_Video_Scale(scale_x, scale_y);
         SDL_GetMouseState(&x, &y);
-        x /= scale_x;
-        y /= scale_y;
+        if (render_dst.w > 0 && render_dst.h > 0) {
+            x = (x - render_dst.x) * hwcursor.GameW / render_dst.w;
+            y = (y - render_dst.y) * hwcursor.GameH / render_dst.h;
+        } else {
+            float scale_x, scale_y;
+            Get_Video_Scale(scale_x, scale_y);
+            x /= scale_x;
+            y /= scale_y;
+        }
+        if (x >= hwcursor.GameW) x = hwcursor.GameW - 1;
+        if (x < 0) x = 0;
+        if (y >= hwcursor.GameH) y = hwcursor.GameH - 1;
+        if (y < 0) y = 0;
     }
 }
 
@@ -798,6 +824,12 @@ public:
     {
         void* pixels;
         int pitch;
+
+        int cur_w = 0, cur_h = 0;
+        SDL_GetRendererOutputSize(renderer, &cur_w, &cur_h);
+        if (cur_w > 0 && cur_h > 0 && (cur_w != last_out_w || cur_h != last_out_h)) {
+            Update_HWCursor_Settings();
+        }
 
         SDL_BlitSurface(surface, NULL, windowSurface, NULL);
 

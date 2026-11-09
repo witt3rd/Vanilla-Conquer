@@ -36,7 +36,7 @@ void WWKeyboardClassSDL2::Fill_Buffer_From_System(void)
 #endif
     SDL_Event event;
 
-    while (!Is_Buffer_Full() && SDL_PollEvent(&event)) {
+    while (SDL_PollEvent(&event)) {
         unsigned short key;
         switch (event.type) {
         case SDL_QUIT:
@@ -72,14 +72,7 @@ void WWKeyboardClassSDL2::Fill_Buffer_From_System(void)
                 break;
             }
 
-            if (Settings.Mouse.RawInput || Is_Gamepad_Active()) {
-                Get_Video_Mouse(x, y);
-            } else {
-                float scale_x = 1.0f, scale_y = 1.0f;
-                Get_Video_Scale(scale_x, scale_y);
-                x = event.button.x / scale_x;
-                y = event.button.y / scale_y;
-            }
+            Get_Video_Mouse(x, y);
 
             Put_Mouse_Message(key, x, y, event.type == SDL_MOUSEBUTTONDOWN ? false : true);
         } break;

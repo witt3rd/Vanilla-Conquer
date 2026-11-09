@@ -1,4 +1,5 @@
 /build*
+/share
 /CMakeUserPresets.json
 /.cache
 /.vscode

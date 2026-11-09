@@ -195,8 +195,10 @@ void ThemeClass::AI(void)
             **	Start the song playing and then flag it so that a new song will
             **	be picked when this one ends.
             */
-            Play_Song(Pending);
-            Pending = THEME_PICK_ANOTHER;
+            if (Pending != THEME_NONE) {
+                Play_Song(Pending);
+                Pending = THEME_PICK_ANOTHER;
+            }
         }
         Sound_Callback();
     }
@@ -225,6 +227,21 @@ ThemeType ThemeClass::Next_Song(ThemeType theme)
         theme = Next_Song(THEME_PICK_ANOTHER);
     } else {
         if (theme == THEME_PICK_ANOTHER || (!_themes[theme].Repeat && !Options.IsScoreRepeat)) {
+            int allowed_count = 0;
+            ThemeType single_allowed = THEME_NONE;
+            for (ThemeType t = THEME_FIRST; t <= THEME_LAST; t++) {
+                if (Is_Allowed(t)) {
+                    allowed_count++;
+                    single_allowed = t;
+                }
+            }
+            if (allowed_count == 0) {
+                return THEME_NONE;
+            }
+            if (allowed_count == 1) {
+                return single_allowed;
+            }
+
             if (Options.IsScoreShuffle) {
 
                 /*

@@ -23,6 +23,7 @@ bool VQPaletteChange = false;
 extern unsigned char* InterpolatedPalettes[100];
 extern bool PalettesRead;
 extern unsigned PaletteCounter;
+void Create_Palette_Interpolation_Table(void);
 
 /**
  * Flags a VQA Palette change.
@@ -46,10 +47,15 @@ void VQA_SetPalette(uint8_t* palette, int numbytes, bool slowpal)
 
     Increase_Palette_Luminance(palette, 15, 15, 15, 63);
 
-    if (PalettesRead && InterpolationTable) {
-        void* paletteinterpol = (void*)&InterpolationTable->PaletteInterpolationTable;
-        size_t table_size = sizeof(InterpolationTable->PaletteInterpolationTable);
-        memcpy(paletteinterpol, InterpolatedPalettes[PaletteCounter++], table_size);
+    if (InterpolationTable) {
+        if (PalettesRead && InterpolatedPalettes[PaletteCounter]) {
+            void* paletteinterpol = (void*)&InterpolationTable->PaletteInterpolationTable;
+            size_t table_size = sizeof(InterpolationTable->PaletteInterpolationTable);
+            memcpy(paletteinterpol, InterpolatedPalettes[PaletteCounter++], table_size);
+        } else {
+            InterpolationPalette = palette;
+            Create_Palette_Interpolation_Table();
+        }
     }
 
     Set_Palette(palette);

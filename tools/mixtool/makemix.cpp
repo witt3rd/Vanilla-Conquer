@@ -234,7 +234,7 @@ void Extract_Mix(const char* filename,
                 }
             }
 
-            if (size > 0 && size < BUFFER_SIZE) {
+            if (size > 0 && size <= BUFFER_SIZE) {
                 if (reader.Read(buffer, size) == size) {
                     writer.Write(buffer, size);
                 } else if (Verbose) {
