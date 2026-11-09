@@ -1,4 +1,5 @@
 #include "random.h"
+#include "cnc_lean_ffi.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -45,30 +46,103 @@ static const uint8_t kSinTable[256] = {
     0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x7b, 0x7b, 0x7c, 0x7d, 0x7d, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e
 };
 
-static int calcx_td(uint8_t param, int distance)
+static int16_t calcx_ref(uint8_t param, uint16_t distance)
 {
     int8_t sp = static_cast<int8_t>(param);
-    return (static_cast<int>(sp) * distance) >> 7;
+    return static_cast<int16_t>((static_cast<int>(sp) * static_cast<int>(distance)) >> 7);
 }
 
-static int calcy_td(uint8_t param, int distance)
+static int16_t calcy_ref(uint8_t param, uint16_t distance)
 {
     int8_t sp = static_cast<int8_t>(param);
-    return -((static_cast<int>(sp) * distance) >> 7);
+    return static_cast<int16_t>(-((static_cast<int>(sp) * static_cast<int>(distance)) >> 7));
 }
 
-static uint8_t rotation_adjust_td(uint8_t current, uint8_t desired, uint8_t rate)
+static uint8_t rotation_adjust_ref(uint8_t current, uint8_t desired, uint8_t rate)
 {
-    uint8_t clamped = rate & 0x7F;
+    uint8_t clamped = rate > 127 ? 127 : rate;
     int8_t diff = static_cast<int8_t>(desired - current);
     int abs_diff = (diff < 0) ? -static_cast<int>(diff) : static_cast<int>(diff);
-    if (abs_diff <= static_cast<int>(clamped)) {
+    if (abs_diff < static_cast<int>(clamped)) {
         return desired;
     }
-    if (diff > 0) {
-        return static_cast<uint8_t>(current + clamped);
+    if (diff < 0) {
+        return static_cast<uint8_t>(current - clamped);
     }
-    return static_cast<uint8_t>(current - clamped);
+    return static_cast<uint8_t>(current + clamped);
+}
+
+static bool verify_lean_ffi_parity()
+{
+    // 1. Verify CosTable and SinTable across all 256 directions
+    for (int d = 0; d < 256; ++d) {
+        uint8_t dir = static_cast<uint8_t>(d);
+        if (cnc_lean_cos_lookup(dir) != kCosTable[d]) {
+            std::fprintf(stderr, "FFI parity error: cnc_lean_cos_lookup(%d)\n", d);
+            return false;
+        }
+        if (cnc_lean_sin_lookup(dir) != kSinTable[d]) {
+            std::fprintf(stderr, "FFI parity error: cnc_lean_sin_lookup(%d)\n", d);
+            return false;
+        }
+    }
+
+    // 2. Verify calcx, calcy, move_point, coord_move across all 256 directions & sample distances
+    const uint16_t dists[] = {0, 1, 2, 7, 16, 63, 64, 127, 128, 255, 256, 1024, 4096};
+    for (int d = 0; d < 256; ++d) {
+        uint8_t dir = static_cast<uint8_t>(d);
+        for (size_t di = 0; di < sizeof(dists) / sizeof(dists[0]); ++di) {
+            uint16_t dist = dists[di];
+            uint16_t lx = cnc_lean_calcx(kCosTable[d], dist);
+            uint16_t rx = static_cast<uint16_t>(calcx_ref(kCosTable[d], dist));
+            if (lx != rx) {
+                std::fprintf(stderr, "FFI parity error: cnc_lean_calcx(dir=%d, dist=%u): %u != %u\n",
+                             d, dist, lx, rx);
+                return false;
+            }
+            uint16_t ly = cnc_lean_calcy(kSinTable[d], dist);
+            uint16_t ry = static_cast<uint16_t>(calcy_ref(kSinTable[d], dist));
+            if (ly != ry) {
+                std::fprintf(stderr, "FFI parity error: cnc_lean_calcy(dir=%d, dist=%u): %u != %u\n",
+                             d, dist, ly, ry);
+                return false;
+            }
+        }
+    }
+
+    // 3. Verify rotation_adjust across all 256x256 facing pairs
+    const uint8_t rates[] = {0, 1, 5, 16, 32, 64, 127, 200};
+    for (size_t ri = 0; ri < sizeof(rates) / sizeof(rates[0]); ++ri) {
+        uint8_t rate = rates[ri];
+        for (int c = 0; c < 256; ++c) {
+            for (int t = 0; t < 256; ++t) {
+                uint8_t got = cnc_lean_rotation_adjust(static_cast<uint8_t>(c), static_cast<uint8_t>(t), rate);
+                uint8_t exp = rotation_adjust_ref(static_cast<uint8_t>(c), static_cast<uint8_t>(t), rate);
+                if (got != exp) {
+                    std::fprintf(stderr, "FFI parity error: cnc_lean_rotation_adjust(%d, %d, %d): %d != %d\n",
+                                 c, t, rate, got, exp);
+                    return false;
+                }
+            }
+        }
+    }
+
+    // 4. Verify Spot_Index and StoppingCoordAbs
+    const uint32_t expected_stopping[5] = {
+        0x00800080u, 0x00400040u, 0x004000C0u, 0x00C00040u, 0x00C000C0u
+    };
+    for (uint32_t s = 0; s < 5; ++s) {
+        if (cnc_lean_stopping_coord_abs(s) != expected_stopping[s]) {
+            std::fprintf(stderr, "FFI parity error: cnc_lean_stopping_coord_abs(%u)\n", s);
+            return false;
+        }
+        if (cnc_lean_spot_index(expected_stopping[s]) != s) {
+            std::fprintf(stderr, "FFI parity error: cnc_lean_spot_index(stopping[%u])\n", s);
+            return false;
+        }
+    }
+
+    return true;
 }
 
 struct TraceUnit
@@ -89,11 +163,13 @@ struct TraceUnit
 
 static void step_unit_td(TraceUnit& u)
 {
-    uint8_t nextFacing = rotation_adjust_td(u.facing, u.desiredFacing, 16);
+    uint8_t nextFacing = cnc_lean_rotation_adjust(u.facing, u.desiredFacing, 16);
     if (u.isDriving && nextFacing == u.desiredFacing) {
-        int dist = static_cast<int>(u.speed);
-        u.x += calcx_td(kCosTable[nextFacing], dist);
-        u.y += calcy_td(kSinTable[nextFacing], dist);
+        uint16_t dist = static_cast<uint16_t>(u.speed);
+        u.x = static_cast<int>(static_cast<int16_t>(
+            cnc_lean_move_point_x(static_cast<uint16_t>(u.x), nextFacing, dist)));
+        u.y = static_cast<int>(static_cast<int16_t>(
+            cnc_lean_move_point_y(static_cast<uint16_t>(u.y), nextFacing, dist)));
     }
     u.facing = nextFacing;
 }
@@ -134,6 +210,10 @@ int main(int argc, char** argv)
         } else if (std::strcmp(argv[i], "--ticks") == 0 && i + 1 < argc) {
             numTicks = std::atoi(argv[++i]);
         }
+    }
+
+    if (!verify_lean_ffi_parity()) {
+        return 1;
     }
 
     RandomClass rng(0x12349876u);

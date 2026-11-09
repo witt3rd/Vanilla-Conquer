@@ -73,6 +73,7 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #include "function.h"
+#include "cnc_lean_ffi.h"
 
 /*
 ** New sidebar for GlyphX multiplayer. ST - 3/26/2019 12:24PM
@@ -1629,28 +1630,7 @@ TriggerClass* CellClass::Get_Trigger(void) const
  *=============================================================================================*/
 int CellClass::Spot_Index(COORDINATE coord)
 {
-    COORDINATE rel = Coord_Fraction(coord); // Sub coordinate value within cell.
-
-    /*
-    **	If the coordinate is close enough to the center of the cell, then return
-    **	the center position index.
-    */
-    if (Distance(rel, 0x00800080L) < 60) {
-        return (0);
-    }
-
-    /*
-    **	Since the center cell position has been eliminated, a simple comparison
-    **	as related to the center of the cell can be used to determine the sub
-    **	position. Take advantage of the fact that the sub positions are organized
-    **	from left to right, top to bottom.
-    */
-    int index = 0;
-    if (Coord_X(rel) > 0x80)
-        index |= 0x01;
-    if (Coord_Y(rel) > 0x80)
-        index |= 0x02;
-    return (index + 1);
+    return static_cast<int>(cnc_lean_spot_index(static_cast<uint32_t>(coord)));
 }
 
 /***********************************************************************************************
@@ -1684,24 +1664,6 @@ COORDINATE CellClass::Closest_Free_Spot(COORDINATE coord, bool any) const
     Validate();
     int spot_index = Spot_Index(coord);
 
-    /*
-    **	This precalculated sequence table records the closest spots to any given spot. Sequential
-    **	examination of these spots for availability ensures that the closes available one is
-    **	discovered first.
-    */
-    static unsigned char _sequence[5][4] = {{1, 2, 3, 4}, {0, 2, 3, 4}, {0, 1, 4, 3}, {0, 1, 4, 2}, {0, 2, 3, 1}};
-
-    /*
-    **	In the case of the center coordinate being requested, but is occupied, then all other
-    **	sublocations are equidistant. Instead of picking a static sequence of examination, the
-    **	order is mixed up by way of this table.
-    */
-    static unsigned char _alternate[4][4] = {
-        {1, 2, 3, 4},
-        {2, 3, 4, 1},
-        {3, 4, 1, 2},
-        {4, 1, 2, 3},
-    };
     coord &= Coord_Whole(coord);
 
     /*
@@ -1716,32 +1678,23 @@ COORDINATE CellClass::Closest_Free_Spot(COORDINATE coord, bool any) const
     **	then just return with the stopping coordinate value.
     */
     if (any || Is_Spot_Free(spot_index)) {
-        return (Coord_Add(coord, StoppingCoordAbs[spot_index]));
+        return (Coord_Add(coord, static_cast<COORDINATE>(cnc_lean_stopping_coord_abs(static_cast<uint32_t>(spot_index)))));
     }
 
     /*
     **	Scan through all available sub-locations in the cell in order to determine
-    **	the closest one to the coordinate requested. Use precalculated table so that
-    **	when the first free position is found, bail.
+    **	the closest one to the coordinate requested. Use Lean-verified resolution
+    **	while preserving the exact PRNG call when the center spot (0) is occupied.
     */
-    unsigned char* sequence;
+    uint8_t alt_idx = 0;
     if (spot_index == 0) {
-        sequence = &_alternate[Random_Pick(0, 3)][0];
-    } else {
-        sequence = &_sequence[spot_index][0];
+        alt_idx = static_cast<uint8_t>(Random_Pick(0, 3));
     }
-    for (int index = 0; index < 4; index++) {
-        int pos = *sequence++;
-
-        if (Is_Spot_Free(pos)) {
-            return (Coord_Add(coord, StoppingCoordAbs[pos]));
-        }
-    }
-
-    /*
-    **	No free spot could be found so return a NULL coordinate.
-    */
-    return (0x00000000L);
+    return static_cast<COORDINATE>(cnc_lean_resolve_free_spot_coord(
+        static_cast<uint32_t>(coord),
+        static_cast<uint32_t>(spot_index),
+        static_cast<uint8_t>(Flag.Composite),
+        alt_idx));
 }
 
 /***********************************************************************************************

@@ -21,6 +21,7 @@ set(COMMON_SRC
     ccfile.cpp
     cdfile.cpp
     cliprect.cpp
+    cnc_lean_ffi.c
     combuf.cpp
     control.cpp
     crc.cpp

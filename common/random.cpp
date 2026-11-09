@@ -36,6 +36,7 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #include "random.h"
+#include "cnc_lean_ffi.h"
 #ifdef RANDOM_COUNT
 #include <stdio.h>
 extern int Frame;
@@ -92,13 +93,13 @@ int RandomClass::operator()(void)
     /*
     **	Transform the seed value into the next number in the sequence.
     */
-    Seed = (Seed * MULT_CONSTANT) + ADD_CONSTANT;
+    Seed = cnc_lean_random_next_seed(Seed);
 
     /*
     **	Extract the 'random' bits from the seed and return that value as the
     **	random number result.
     */
-    return ((Seed >> THROW_AWAY_BITS) & (~((~0) << SIGNIFICANT_BITS)));
+    return static_cast<int>(cnc_lean_random_extract_val(Seed));
 }
 
 /***********************************************************************************************
@@ -149,18 +150,12 @@ int RandomClass::operator()(int minval, int maxval)
     **	range of random numbers desired. Notice that the scan is
     **	limited to the range of significant bits returned by the
     **	random number algorithm.
-    */
-    int magnitude = maxval - minval;
-    int highbit = SIGNIFICANT_BITS - 1;
-    while ((magnitude & (1 << highbit)) == 0 && highbit > 0) {
-        highbit--;
-    }
-
-    /*
+    **
     **	Create a full bit mask pattern that has all bits set that just
     **	barely covers the magnitude of the number range desired.
     */
-    int mask = ~((~0L) << (highbit + 1));
+    int magnitude = maxval - minval;
+    int mask = static_cast<int>(cnc_lean_random_mask(static_cast<uint32_t>(magnitude)));
 
     /*
     **	Keep picking random numbers until it fits within the magnitude desired.

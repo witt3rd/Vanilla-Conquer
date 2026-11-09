@@ -38,6 +38,7 @@
 
 #include "function.h"
 #include "facing.h"
+#include "cnc_lean_ffi.h"
 
 /***********************************************************************************************
  * FacingClass::FacingClass -- Default constructor for the facing class.                       *
@@ -142,28 +143,11 @@ int FacingClass::Rotation_Adjust(int rate)
         rate = MIN(rate, 127);
 
         DirType oldfacing = CurrentFacing;
-        int diff = Difference();
-
-        /*
-        **	If the allowed facing change is greater than the difference between
-        **	the current facing and the desired facing, then just snap the
-        **	facing to the new value.
-        */
-        if (ABS(diff) < rate) {
-            CurrentFacing = DesiredFacing;
-        } else {
-
-            /*
-            **	Adjust the current facing clockwise or counterclockwise depending
-            **	on the shortest distance to the desired facing from the current
-            **	facing.
-            */
-            if (diff < 0) {
-                CurrentFacing = (DirType)(CurrentFacing - (DirType)rate);
-            } else {
-                CurrentFacing = (DirType)(CurrentFacing + (DirType)rate);
-            }
-        }
+        uint8_t clamped_rate = static_cast<uint8_t>(rate > 0 ? rate : 0);
+        CurrentFacing = static_cast<DirType>(cnc_lean_rotation_adjust(
+            static_cast<uint8_t>(CurrentFacing),
+            static_cast<uint8_t>(DesiredFacing),
+            clamped_rate));
 
         /*
         **	If this facing adjustment caused the current facing to rotate into a

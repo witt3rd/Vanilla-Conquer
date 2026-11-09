@@ -3,11 +3,13 @@ import CnCLean.Core.Types
 import CnCLean.Core.Random
 import CnCLean.Sim.Unit
 import CnCLean.Sim.Step
+import CnCLean.FFI.Export
 
 namespace CnCLean.Proofs
 
 open CnCLean.Core
 open CnCLean.Sim
+open CnCLean.FFI
 
 /-- Invariant 1: Coordinate Bounding
     Any 1D cell index constructed from `(cx, cy)` in the 64x64 cell grid is strictly bounded below 4096. -/
@@ -60,5 +62,14 @@ theorem step_transition_determinism (s1 s2 : SimState) (a1 a2 : List String)
     stepTick s1 a1 = stepTick s2 a2 := by
   subst hs ha
   rfl
+
+/-- Invariant 7: FFI Exported Cell Extraction Equivalence
+    The unboxed C-exported `cncLeanCoordCell` matches `cellIndex` on unpacked coordinate components
+    for all 32-bit packed coordinates. -/
+theorem ffi_coord_cell_equivalence (coord : UInt32) :
+    let (cx, cy, _, _) := coordComponents coord
+    (cncLeanCoordCell coord).toUInt32 = cellIndex cx cy := by
+  simp [cncLeanCoordCell, coordComponents, cellIndex]
+  bv_decide
 
 end CnCLean.Proofs
