@@ -3,3 +3,6 @@
 /CMakeUserPresets.json
 /.cache
 /.vscode
+/lean/.lake
+__pycache__/
+*.pyc

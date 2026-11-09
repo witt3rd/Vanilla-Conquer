@@ -1,0 +1,10 @@
+name = "CnCLean"
+version = "0.1.0"
+defaultTargets = ["CnCLean", "cnc-oracle"]
+
+[[lean_lib]]
+name = "CnCLean"
+
+[[lean_exe]]
+name = "cnc-oracle"
+root = "Main"

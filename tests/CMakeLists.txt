@@ -1,5 +1,5 @@
 add_custom_target(tests)
-add_dependencies(tests test_miscasm test_face test_rect test_fading test_lcw test_xordelta test_irandom test_fatpixel test_tobuff test_drawline test_putpixel test_drawbuff)
+add_dependencies(tests test_miscasm test_face test_rect test_fading test_lcw test_xordelta test_irandom test_fatpixel test_tobuff test_drawline test_putpixel test_drawbuff test_sim_trace)
 
 add_executable(test_miscasm miscasm.cpp)
 target_include_directories(test_miscasm PUBLIC .. ../common)
@@ -72,3 +72,23 @@ target_include_directories(test_drawbuff PUBLIC .. ../common)
 target_compile_definitions(test_drawbuff PUBLIC TRUE_FALSE_DEFINED ENGLISH $<$<CONFIG:DEBUG>:_DEBUG> _WINDOWS _CRT_SECURE_NO_DEPRECATE _CRT_NONSTDC_NO_DEPRECATE WINSOCK_IPX)
 target_link_libraries(test_drawbuff PUBLIC commonv ${STATIC_LIBS})
 add_test(NAME drawbuff COMMAND ${TARGET_SYSTEM_EMULATOR} $<TARGET_FILE:test_drawbuff>)
+
+add_executable(test_sim_trace test_sim_trace.cpp)
+target_include_directories(test_sim_trace PUBLIC .. ../common)
+target_compile_definitions(test_sim_trace PUBLIC TRUE_FALSE_DEFINED ENGLISH $<$<CONFIG:DEBUG>:_DEBUG> _WINDOWS _CRT_SECURE_NO_DEPRECATE _CRT_NONSTDC_NO_DEPRECATE WINSOCK_IPX)
+target_link_libraries(test_sim_trace PUBLIC common ${STATIC_LIBS})
+add_test(NAME sim_trace COMMAND ${TARGET_SYSTEM_EMULATOR} $<TARGET_FILE:test_sim_trace>)
+
+# End-to-End (E2E) Test Suite Runner
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_custom_target(e2e_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/e2e/run_e2e.py
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Running Vanilla-Conquer End-to-End Test Suite"
+    )
+    add_test(NAME e2e_test_suite
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/e2e/run_e2e.py
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+endif()
