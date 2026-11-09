@@ -121,6 +121,10 @@ public:
         return Occupy_List();
     };
     virtual TARGET As_Target(void) const;
+    int Get_Altitude(void) const
+    {
+        return Altitude;
+    };
 
     /*
     **	File I/O.

@@ -45,6 +45,7 @@
 
 #include "function.h"
 #include "settings.h"
+#include "common/video.h"
 
 /***********************************************************************************************
  * Dialog_Box -- draws a dialog background box                                                 *
@@ -63,6 +64,7 @@
  *=============================================================================================*/
 void Dialog_Box(int x, int y, int w, int h)
 {
+    Video_Set_Tactical_Dialog_Rect(x, y, w, h);
     Draw_Box(x, y, w, h, BOXSTYLE_GREEN_BORDER, true);
 }
 

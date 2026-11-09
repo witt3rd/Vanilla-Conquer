@@ -77,7 +77,13 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 #include "function.h"
 #include "common/fading.h"
+#include "common/video.h"
 #include "ccini.h"
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+
+extern int ActiveTooltipRect[4];
 
 /*
 **	These layer control elements are used to group the displayable objects
@@ -2103,6 +2109,7 @@ void DisplayClass::Draw_It(bool forced)
         IsToRedraw = false;
 
         if (forced) {
+            Video_Set_Tactical_Dialog_Rect(0, 0, -1, -1);
             int max_tac_right = SeenBuff.Get_Width() - (Map.IsSidebarActive ? Map.SideWidth : 0);
             int tac_right = TacPixelX + Lepton_To_Pixel(TacLeptonWidth);
             int tac_bottom = TacPixelY + Lepton_To_Pixel(TacLeptonHeight);
@@ -2440,6 +2447,496 @@ void DisplayClass::Draw_It(bool forced)
         }
 #endif
     }
+
+    Update_Vulkan_Tactical_3D();
+}
+
+static int Map_House_To_Color_ID(HousesType house)
+{
+    switch (house) {
+    case HOUSE_GOOD:
+        return 0; // GDI Gold
+    case HOUSE_BAD:
+        return 1; // Nod Crimson
+    case HOUSE_NEUTRAL:
+    case HOUSE_JP:
+        return 2; // Neutral Titanium-Tan
+    default:
+        if (house >= HOUSE_MULTI1 && house <= HOUSE_MULTI6) {
+            return 3 + ((house - HOUSE_MULTI1) % 4);
+        }
+        return 0;
+    }
+}
+
+void DisplayClass::Update_Vulkan_Tactical_3D(void)
+{
+    if (!InMainLoop) {
+        return;
+    }
+
+    static Tactical3DUBOData ubo;
+    std::memset(&ubo, 0, sizeof(Tactical3DUBOData));
+
+    int gw = SeenBuff.Get_Width() > 0 ? SeenBuff.Get_Width() : 640;
+    int gh = SeenBuff.Get_Height() > 0 ? SeenBuff.Get_Height() : 400;
+    int tacW = Lepton_To_Pixel(TacLeptonWidth);
+    int tacH = Lepton_To_Pixel(TacLeptonHeight);
+    if (tacW <= 0) tacW = 480;
+    if (tacH <= 0) tacH = 384;
+
+    int tacLX = Coord_X(TacticalCoord);
+    int tacLY = Coord_Y(TacticalCoord);
+    int baseCellX = (tacLX >> 8) - 1;
+    int baseCellY = (tacLY >> 8) - 1;
+
+    float subCellX = static_cast<float>(tacLX & 0xFF) / 256.0f + 1.0f;
+    float subCellY = static_cast<float>(tacLY & 0xFF) / 256.0f + 1.0f;
+    float cellsW = static_cast<float>(tacW) / 24.0f;
+    float cellsH = static_cast<float>(tacH) / 24.0f;
+
+    ubo.view_params0[1] = static_cast<float>(TacPixelX) / static_cast<float>(gw);
+    ubo.view_params0[2] = static_cast<float>(TacPixelY) / static_cast<float>(gh);
+    ubo.view_params0[3] = static_cast<float>(TacPixelX + tacW) / static_cast<float>(gw);
+
+    ubo.view_params1[0] = static_cast<float>(TacPixelY + tacH) / static_cast<float>(gh);
+    ubo.view_params1[1] = subCellX;
+    ubo.view_params1[2] = subCellY;
+    ubo.view_params1[3] = cellsW;
+
+    ubo.view_params2[0] = cellsH;
+    ubo.view_params2[1] = static_cast<float>(baseCellX);
+    ubo.view_params2[2] = static_cast<float>(baseCellY);
+    ubo.view_params2[3] = static_cast<float>((Theater >= THEATER_FIRST && Theater < THEATER_COUNT) ? Theater : THEATER_TEMPERATE);
+
+    // Rubber-band selection box
+    if (IsRubberBand) {
+        int x0 = std::min(BandX, NewX) + TacPixelX;
+        int y0 = std::min(BandY, NewY) + TacPixelY;
+        int x1 = std::max(BandX, NewX) + TacPixelX;
+        int y1 = std::max(BandY, NewY) + TacPixelY;
+        ubo.overlay_rects[0][0] = static_cast<float>(x0) / static_cast<float>(gw);
+        ubo.overlay_rects[0][1] = static_cast<float>(y0) / static_cast<float>(gh);
+        ubo.overlay_rects[0][2] = static_cast<float>(x1) / static_cast<float>(gw);
+        ubo.overlay_rects[0][3] = static_cast<float>(y1) / static_cast<float>(gh);
+    } else {
+        ubo.overlay_rects[0][2] = -1.0f;
+        ubo.overlay_rects[0][3] = -1.0f;
+    }
+
+    // Tooltip box from HelpClass::Draw_It
+    if (ActiveTooltipRect[2] > ActiveTooltipRect[0] && ActiveTooltipRect[3] > ActiveTooltipRect[1]) {
+        ubo.overlay_rects[2][0] = static_cast<float>(ActiveTooltipRect[0]) / static_cast<float>(gw);
+        ubo.overlay_rects[2][1] = static_cast<float>(ActiveTooltipRect[1]) / static_cast<float>(gh);
+        ubo.overlay_rects[2][2] = static_cast<float>(ActiveTooltipRect[2]) / static_cast<float>(gw);
+        ubo.overlay_rects[2][3] = static_cast<float>(ActiveTooltipRect[3]) / static_cast<float>(gh);
+    } else {
+        ubo.overlay_rects[2][2] = -1.0f;
+        ubo.overlay_rects[2][3] = -1.0f;
+    }
+
+    // Multiplayer/system message rows at top of tactical view
+    int numMsgs = Messages.Num_Messages();
+    ubo.overlay_rects[3][0] =
+        (numMsgs > 0) ? (static_cast<float>(TacPixelY + numMsgs * 14 + 6) / static_cast<float>(gh)) : -1.0f;
+    ubo.overlay_rects[3][1] = IsRepairMode ? 1.0f : (IsSellMode ? 2.0f : 0.0f);
+
+    int entCount = 0;
+    int lightCount = 0;
+
+    auto addPointLight = [&](float wx, float wy, float wz, float rad, float r, float g, float b, float intensity) {
+        if (lightCount >= 32) return;
+        ubo.light_pos_rad[lightCount][0] = wx;
+        ubo.light_pos_rad[lightCount][1] = wy;
+        ubo.light_pos_rad[lightCount][2] = wz;
+        ubo.light_pos_rad[lightCount][3] = rad;
+        ubo.light_col_int[lightCount][0] = r;
+        ubo.light_col_int[lightCount][1] = g;
+        ubo.light_col_int[lightCount][2] = b;
+        ubo.light_col_int[lightCount][3] = intensity;
+        lightCount++;
+    };
+
+    // 1. Populate 30 x 20 Cell Grid around (baseCellX, baseCellY)
+    for (int gy = 0; gy < 20; ++gy) {
+        for (int gx = 0; gx < 30; ++gx) {
+            int cx = std::max(0, std::min(MAP_CELL_W - 1, baseCellX + gx));
+            int cy = std::max(0, std::min(MAP_CELL_H - 1, baseCellY + gy));
+            CELL cell = XY_Cell(cx, cy);
+            const CellClass& c = (*this)[cell];
+
+            LandType land = c.Land_Type();
+            uint32_t landBits = static_cast<uint32_t>(land) & 7u;
+            if (c.TType >= TEMPLATE_RIVER1 && c.TType <= TEMPLATE_FALLS2) {
+                landBits = 7u;
+            }
+
+            uint32_t ovlBits = 0u;
+            uint32_t subBits = 0u;
+            if (c.Overlay >= OVERLAY_TIBERIUM1 && c.Overlay <= OVERLAY_TIBERIUM12) {
+                ovlBits = static_cast<uint32_t>(std::max(1, std::min(12, static_cast<int>(c.OverlayData) + 1)));
+            } else if (c.Overlay >= OVERLAY_SANDBAG_WALL && c.Overlay <= OVERLAY_WOOD_WALL) {
+                ovlBits = 13u;
+                subBits = static_cast<uint32_t>(c.Overlay - OVERLAY_SANDBAG_WALL) & 15u;
+            } else if (c.Overlay == OVERLAY_CONCRETE || c.Overlay == OVERLAY_ROAD) {
+                ovlBits = 14u;
+            } else if (c.Overlay == OVERLAY_WOOD_CRATE || c.Overlay == OVERLAY_STEEL_CRATE) {
+                ovlBits = 15u;
+            }
+
+            if (ovlBits != 13u && c.Smudge != SMUDGE_NONE) {
+                if (c.Smudge >= SMUDGE_CRATER1 && c.Smudge <= SMUDGE_CRATER6) {
+                    subBits = static_cast<uint32_t>(std::min(5, static_cast<int>(c.Smudge - SMUDGE_CRATER1) + 1));
+                } else if (c.Smudge >= SMUDGE_SCORCH1 && c.Smudge <= SMUDGE_SCORCH6) {
+                    subBits = 6u;
+                } else if (c.Smudge >= SMUDGE_BIB1 && c.Smudge <= SMUDGE_BIB3) {
+                    subBits = 7u;
+                }
+            }
+
+            uint32_t slopeBits = 0u;
+            if (c.TType >= TEMPLATE_BRIDGE1 && c.TType <= TEMPLATE_BRIDGE4D) {
+                slopeBits = 9u;
+            } else if (c.TType == TEMPLATE_FALLS1 || c.TType == TEMPLATE_FALLS2) {
+                slopeBits = 10u;
+            } else if (c.TType == TEMPLATE_FORD1 || c.TType == TEMPLATE_FORD2) {
+                slopeBits = 11u;
+            } else if ((c.TType >= TEMPLATE_SLOPE1 && c.TType <= TEMPLATE_SLOPE38) ||
+                       (c.TType >= TEMPLATE_BOULDER1 && c.TType <= TEMPLATE_BOULDER6) || land == LAND_ROCK) {
+                slopeBits = 1u + (static_cast<uint32_t>(c.TType) & 7u);
+            }
+
+            uint32_t visBits = 2u;
+            if (!Debug_Unshroud && PlayerPtr != nullptr) {
+                if (!c.Is_Mapped(PlayerPtr)) {
+                    visBits = 0u;
+                } else if (!c.Is_Visible(PlayerPtr)) {
+                    visBits = 1u;
+                }
+            }
+
+            uint32_t cursorBits = 0u;
+            if (c.IsCursorHere) {
+                cursorBits = (ProximityCheck && c.Is_Generally_Clear()) ? 1u : 2u;
+            }
+
+            uint32_t seedBits = static_cast<uint32_t>(c.TIcon ^ (cx * 13 + cy * 31)) & 0xFFu;
+            uint32_t packed = landBits | (ovlBits << 4u) | (subBits << 8u) | (slopeBits << 12u) |
+                              (visBits << 16u) | (cursorBits << 18u) | (seedBits << 20u);
+
+            int idx = gy * 30 + gx;
+            ubo.cell_grid[idx >> 2][idx & 3] = packed;
+        }
+    }
+
+    auto toLocalCellX = [&](COORDINATE coord) -> float {
+        return static_cast<float>(Coord_X(coord)) / 256.0f - static_cast<float>(baseCellX);
+    };
+    auto toLocalCellY = [&](COORDINATE coord) -> float {
+        return static_cast<float>(Coord_Y(coord)) / 256.0f - static_cast<float>(baseCellY);
+    };
+    auto inTacticalMargin = [&](float wx, float wy, float margin) -> bool {
+        return wx >= -margin && wx <= (30.0f + margin) && wy >= -margin && wy <= (20.0f + margin);
+    };
+
+    constexpr float kDirToRad = 6.28318530718f / 256.0f;
+
+    // 2. Extract 3D Base Structures (Buildings)
+    for (int i = 0; i < Buildings.Count() && entCount < 128; ++i) {
+        BuildingClass* b = Buildings.Ptr(i);
+        if (!b || !b->IsActive || b->IsInLimbo || !b->Class) continue;
+
+        COORDINATE center = b->Center_Coord();
+        CELL c = Coord_Cell(center);
+        if (!Debug_Unshroud && PlayerPtr != nullptr && !b->IsOwnedByPlayer && !(*this)[c].Is_Mapped(PlayerPtr)) {
+            continue;
+        }
+
+        float wx = toLocalCellX(center);
+        float wy = toLocalCellY(center);
+        if (!inTacticalMargin(wx, wy, 2.5f)) continue;
+
+        int subType = std::max(0, std::min(127, static_cast<int>(*b)));
+        int houseId = Map_House_To_Color_ID(b->Owner());
+        int packedType = 1 | (subType << 3) | (houseId << 10);
+
+        int flags = 0;
+        if (b->Is_Selected_By_Player()) flags |= 1;
+        if (b->IsInRecoilState) flags |= 2;
+        if (b->Health_Ratio() < 0x0080) flags |= 8;
+        if (b->BState == BSTATE_CONSTRUCTION || b->IsRepairing) flags |= 16;
+        if (b->IsCharged || b->IsCharging) flags |= 32;
+
+        float health = std::max(0.01f, std::min(0.999f, static_cast<float>(b->Health_Ratio()) / 256.0f));
+        int fw = std::max(1, std::min(7, b->Class->Width()));
+        int fh = std::max(1, std::min(7, b->Class->Height()));
+
+        float buildStage = (b->BState == BSTATE_CONSTRUCTION)
+                               ? std::max(0.15f, std::min(1.0f, static_cast<float>(b->Fetch_Stage() + 1) / 8.0f))
+                               : 1.0f;
+        float turYaw = static_cast<float>(b->PrimaryFacing.Current()) * kDirToRad;
+
+        ubo.ent_data0[entCount][0] = wx;
+        ubo.ent_data0[entCount][1] = wy;
+        ubo.ent_data0[entCount][2] = 0.0f;
+        ubo.ent_data0[entCount][3] = static_cast<float>(packedType);
+
+        ubo.ent_data1[entCount][0] = buildStage;
+        ubo.ent_data1[entCount][1] = turYaw;
+        ubo.ent_data1[entCount][2] = static_cast<float>(flags) + health;
+        ubo.ent_data1[entCount][3] = static_cast<float>(fw | (fh << 3));
+        entCount++;
+
+        if (*b == STRUCT_OBELISK && (b->IsCharged || b->IsCharging)) {
+            addPointLight(wx, wy - 0.1f, 0.85f, 3.2f, 1.0f, 0.12f, 0.16f, b->IsCharged ? 2.4f : 1.2f);
+        } else if (*b == STRUCT_REFINERY || *b == STRUCT_STORAGE) {
+            addPointLight(wx, wy + 0.25f, 0.30f, 2.2f, 0.12f, 0.95f, 0.35f, 1.1f);
+        } else if (*b == STRUCT_POWER || *b == STRUCT_ADVANCED_POWER) {
+            addPointLight(wx + 0.3f, wy - 0.15f, 0.45f, 2.2f, 0.95f, 0.68f, 0.25f, 0.95f);
+        }
+    }
+
+    // 3. Extract 3D Articulated Vehicles (Units)
+    for (int i = 0; i < Units.Count() && entCount < 128; ++i) {
+        UnitClass* u = Units.Ptr(i);
+        if (!u || !u->IsActive || u->IsInLimbo || !u->Class) continue;
+
+        COORDINATE center = u->Center_Coord();
+        CELL c = Coord_Cell(center);
+        if (!Debug_Unshroud && PlayerPtr != nullptr && !u->IsOwnedByPlayer && !(*this)[c].Is_Visible(PlayerPtr)) {
+            continue;
+        }
+
+        float wx = toLocalCellX(center);
+        float wy = toLocalCellY(center);
+        if (!inTacticalMargin(wx, wy, 1.5f)) continue;
+
+        int subType = std::max(0, std::min(127, static_cast<int>(*u)));
+        int houseId = Map_House_To_Color_ID(u->Owner());
+        int packedType = 0 | (subType << 3) | (houseId << 10);
+
+        int flags = 0;
+        if (u->Is_Selected_By_Player()) flags |= 1;
+        if (u->IsInRecoilState) flags |= 2;
+        if (u->Cloak != UNCLOAKED || *u == UNIT_STANK) flags |= 4;
+        if (u->Health_Ratio() < 0x0080) flags |= 8;
+        if (u->IsHarvesting || u->Mission == MISSION_HARVEST) flags |= 32;
+
+        float health = std::max(0.01f, std::min(0.999f, static_cast<float>(u->Health_Ratio()) / 256.0f));
+        float hullYaw = static_cast<float>(u->PrimaryFacing.Current()) * kDirToRad;
+        float turYaw =
+            static_cast<float>(u->Class->IsTurretEquipped ? u->SecondaryFacing.Current() : u->PrimaryFacing.Current()) *
+            kDirToRad;
+
+        ubo.ent_data0[entCount][0] = wx;
+        ubo.ent_data0[entCount][1] = wy;
+        ubo.ent_data0[entCount][2] = 0.0f;
+        ubo.ent_data0[entCount][3] = static_cast<float>(packedType);
+
+        ubo.ent_data1[entCount][0] = hullYaw;
+        ubo.ent_data1[entCount][1] = turYaw;
+        ubo.ent_data1[entCount][2] = static_cast<float>(flags) + health;
+        ubo.ent_data1[entCount][3] = static_cast<float>(u->Pip_Count());
+        entCount++;
+
+        if (u->IsInRecoilState) {
+            float mzx = wx + std::sin(turYaw) * 0.42f;
+            float mzy = wy - std::cos(turYaw) * 0.42f;
+            addPointLight(mzx, mzy, 0.25f, 2.8f, 1.0f, 0.68f, 0.22f, 2.2f);
+        }
+    }
+
+    // 4. Extract 3D Aircraft (Orca, Apache, Chinook, A-10)
+    for (int i = 0; i < Aircraft.Count() && entCount < 128; ++i) {
+        AircraftClass* air = Aircraft.Ptr(i);
+        if (!air || !air->IsActive || air->IsInLimbo || !air->Class) continue;
+
+        COORDINATE center = air->Center_Coord();
+        float wx = toLocalCellX(center);
+        float wy = toLocalCellY(center);
+        if (!inTacticalMargin(wx, wy, 2.0f)) continue;
+
+        int subType = std::max(0, std::min(127, static_cast<int>(*air)));
+        int houseId = Map_House_To_Color_ID(air->Owner());
+        int packedType = 3 | (subType << 3) | (houseId << 10);
+
+        int flags = 0;
+        if (air->Is_Selected_By_Player()) flags |= 1;
+        if (air->Health_Ratio() < 0x0080) flags |= 8;
+
+        float health = std::max(0.01f, std::min(0.999f, static_cast<float>(air->Health_Ratio()) / 256.0f));
+        float yaw = static_cast<float>(air->PrimaryFacing.Current()) * kDirToRad;
+        float altCells = std::max(0.15f, static_cast<float>(air->Altitude) / 24.0f);
+
+        ubo.ent_data0[entCount][0] = wx;
+        ubo.ent_data0[entCount][1] = wy;
+        ubo.ent_data0[entCount][2] = altCells;
+        ubo.ent_data0[entCount][3] = static_cast<float>(packedType);
+
+        ubo.ent_data1[entCount][0] = yaw;
+        ubo.ent_data1[entCount][1] = yaw;
+        ubo.ent_data1[entCount][2] = static_cast<float>(flags) + health;
+        ubo.ent_data1[entCount][3] = 1.0f;
+        entCount++;
+    }
+
+    // 5. Extract 3D Infantry Squads
+    for (int i = 0; i < Infantry.Count() && entCount < 128; ++i) {
+        InfantryClass* inf = Infantry.Ptr(i);
+        if (!inf || !inf->IsActive || inf->IsInLimbo || !inf->Class) continue;
+
+        COORDINATE center = inf->Center_Coord();
+        CELL c = Coord_Cell(center);
+        if (!Debug_Unshroud && PlayerPtr != nullptr && !inf->IsOwnedByPlayer && !(*this)[c].Is_Visible(PlayerPtr)) {
+            continue;
+        }
+
+        float wx = toLocalCellX(center);
+        float wy = toLocalCellY(center);
+        if (!inTacticalMargin(wx, wy, 1.0f)) continue;
+
+        int subType = std::max(0, std::min(127, static_cast<int>(*inf)));
+        int houseId = Map_House_To_Color_ID(inf->Owner());
+        int packedType = 2 | (subType << 3) | (houseId << 10);
+
+        int flags = 0;
+        if (inf->Is_Selected_By_Player()) flags |= 1;
+        if (inf->IsProne) flags |= 32;
+
+        float health = std::max(0.01f, std::min(0.999f, static_cast<float>(inf->Health_Ratio()) / 256.0f));
+        float yaw = static_cast<float>(inf->PrimaryFacing.Current()) * kDirToRad;
+
+        ubo.ent_data0[entCount][0] = wx;
+        ubo.ent_data0[entCount][1] = wy;
+        ubo.ent_data0[entCount][2] = 0.0f;
+        ubo.ent_data0[entCount][3] = static_cast<float>(packedType);
+
+        ubo.ent_data1[entCount][0] = yaw;
+        ubo.ent_data1[entCount][1] = yaw;
+        ubo.ent_data1[entCount][2] = static_cast<float>(flags) + health;
+        ubo.ent_data1[entCount][3] = 1.0f;
+        entCount++;
+    }
+
+    // 6. Extract 3D Trees, Blossom Trees & Outcrop Rocks (Terrains)
+    for (int i = 0; i < Terrains.Count() && entCount < 128; ++i) {
+        TerrainClass* ter = Terrains.Ptr(i);
+        if (!ter || !ter->IsActive || ter->IsInLimbo || !ter->Class) continue;
+
+        COORDINATE center = ter->Target_Coord();
+        CELL c = Coord_Cell(center);
+        if (!Debug_Unshroud && PlayerPtr != nullptr && !(*this)[c].Is_Mapped(PlayerPtr)) {
+            continue;
+        }
+
+        float wx = toLocalCellX(center);
+        float wy = toLocalCellY(center);
+        if (!inTacticalMargin(wx, wy, 1.5f)) continue;
+
+        int subType = std::max(0, std::min(127, static_cast<int>(*ter)));
+        int packedType = 4 | (subType << 3);
+
+        ubo.ent_data0[entCount][0] = wx;
+        ubo.ent_data0[entCount][1] = wy;
+        ubo.ent_data0[entCount][2] = 0.0f;
+        ubo.ent_data0[entCount][3] = static_cast<float>(packedType);
+
+        ubo.ent_data1[entCount][0] = 0.0f;
+        ubo.ent_data1[entCount][1] = 0.0f;
+        ubo.ent_data1[entCount][2] = 0.99f;
+        ubo.ent_data1[entCount][3] = 1.0f;
+        entCount++;
+
+        if (subType == TERRAIN_BLOSSOMTREE1 || subType == TERRAIN_BLOSSOMTREE2) {
+            addPointLight(wx, wy, 0.45f, 2.6f, 0.12f, 0.98f, 0.35f, 1.35f);
+        }
+    }
+
+    // 7. Extract 3D Projectiles, Rockets, Shells & Obelisk Lasers (Bullets)
+    for (int i = 0; i < Bullets.Count() && entCount < 128; ++i) {
+        BulletClass* bul = Bullets.Ptr(i);
+        if (!bul || !bul->IsActive || bul->IsInLimbo || !bul->Class) continue;
+
+        COORDINATE center = bul->Center_Coord();
+        float wx = toLocalCellX(center);
+        float wy = toLocalCellY(center);
+        if (!inTacticalMargin(wx, wy, 2.0f)) continue;
+
+        int subType = std::max(0, std::min(127, static_cast<int>(*bul)));
+        int packedType = 5 | (subType << 3);
+        float altCells = static_cast<float>(bul->Get_Altitude()) / 256.0f;
+        float yaw = static_cast<float>(bul->PrimaryFacing.Current()) * kDirToRad;
+        float auxY = yaw;
+
+        if (*bul == BULLET_LASER && bul->Payback != nullptr) {
+            COORDINATE srcC = bul->Payback->Center_Coord();
+            yaw = toLocalCellX(srcC);
+            auxY = toLocalCellY(srcC);
+            addPointLight(wx, wy, 0.25f, 3.5f, 1.0f, 0.12f, 0.16f, 2.8f);
+        } else {
+            addPointLight(wx, wy, altCells + 0.18f, 2.0f, 1.0f, 0.72f, 0.25f, 1.4f);
+        }
+
+        ubo.ent_data0[entCount][0] = wx;
+        ubo.ent_data0[entCount][1] = wy;
+        ubo.ent_data0[entCount][2] = altCells;
+        ubo.ent_data0[entCount][3] = static_cast<float>(packedType);
+
+        ubo.ent_data1[entCount][0] = yaw;
+        ubo.ent_data1[entCount][1] = auxY;
+        ubo.ent_data1[entCount][2] = 0.99f;
+        ubo.ent_data1[entCount][3] = 0.25f;
+        entCount++;
+    }
+
+    // 8. Extract 3D Volumetric Explosions, Fireballs, Flames & Ion Cannon (Anims)
+    for (int i = 0; i < Anims.Count() && entCount < 128; ++i) {
+        AnimClass* anim = Anims.Ptr(i);
+        if (!anim || !anim->IsActive || anim->IsInLimbo) continue;
+
+        COORDINATE center = anim->Center_Coord();
+        float wx = toLocalCellX(center);
+        float wy = toLocalCellY(center);
+        if (!inTacticalMargin(wx, wy, 2.0f)) continue;
+
+        int subType = std::max(0, std::min(127, static_cast<int>(*anim)));
+        int packedType = 6 | (subType << 3);
+
+        float rad = 0.35f;
+        if (subType == ANIM_FBALL1 || subType == ANIM_ART_EXP1 || subType == ANIM_NAPALM3 ||
+            subType == ANIM_ION_CANNON || subType == ANIM_ATOM_BLAST) {
+            rad = 0.75f;
+        } else if (subType == ANIM_FRAG1 || subType == ANIM_FRAG2 || subType == ANIM_NAPALM2 ||
+                   subType == ANIM_BURN_BIG || subType == ANIM_ON_FIRE_BIG) {
+            rad = 0.52f;
+        }
+
+        ubo.ent_data0[entCount][0] = wx;
+        ubo.ent_data0[entCount][1] = wy;
+        ubo.ent_data0[entCount][2] = 0.15f;
+        ubo.ent_data0[entCount][3] = static_cast<float>(packedType);
+
+        ubo.ent_data1[entCount][0] = 0.25f;
+        ubo.ent_data1[entCount][1] = 0.0f;
+        ubo.ent_data1[entCount][2] = 0.99f;
+        ubo.ent_data1[entCount][3] = rad;
+        entCount++;
+
+        if (subType == ANIM_ION_CANNON) {
+            addPointLight(wx, wy, 0.55f, 5.5f, 0.45f, 0.82f, 1.0f, 3.6f);
+        } else if (subType >= ANIM_CHEM_N && subType <= ANIM_CHEM_NW) {
+            addPointLight(wx, wy, 0.25f, 2.5f, 0.15f, 0.98f, 0.35f, 1.8f);
+        } else if (subType != ANIM_SMOKE_PUFF && subType != ANIM_SMOKE_M && subType != ANIM_LZ_SMOKE) {
+            addPointLight(wx, wy, 0.35f, rad * 5.2f, 1.0f, 0.52f, 0.14f, 2.4f);
+        }
+    }
+
+    ubo.view_params3[0] = static_cast<float>(entCount);
+    ubo.view_params3[1] = static_cast<float>(lightCount);
+    ubo.view_params3[2] = static_cast<float>(PlayerPtr ? Map_House_To_Color_ID(PlayerPtr->Class->House) : 0);
+    ubo.view_params3[3] = 1.0f;
+
+    Video_Set_Tactical_3D_State(true, &ubo);
 }
 
 /***********************************************************************************************

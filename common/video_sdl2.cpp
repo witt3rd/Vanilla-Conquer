@@ -924,3 +924,18 @@ void Video_Set_Ultra_Menu_State(bool active,
     (void)version_text;
     (void)mode;
 }
+
+void Video_Set_Tactical_3D_State(bool active, const Tactical3DUBOData* data)
+{
+    (void)active;
+    (void)data;
+}
+
+void Video_Set_Tactical_Dialog_Rect(int x, int y, int w, int h)
+{
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+}
+

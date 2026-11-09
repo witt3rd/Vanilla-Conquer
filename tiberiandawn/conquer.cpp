@@ -305,6 +305,7 @@ void Main_Game(int argc, char* argv[])
 #endif
         Set_Video_Cursor_Clip(false);
         InMainLoop = false;
+        Video_Set_Tactical_3D_State(false, nullptr);
 
         if (!GameStatisticsPacketSent && PacketLater) {
             Send_Statistics_Packet();
@@ -1625,6 +1626,7 @@ bool Main_Loop()
             }
             //			HidPage.Lock();
             Map.Render();
+            Map.Update_Vulkan_Tactical_3D();
             //			HidPage.Unlock();
         }
     }
@@ -1710,6 +1712,7 @@ bool Main_Loop()
         PlayerRestarts = false;
         Map.Help_Text(TXT_NONE);
         Set_Video_Cursor_Clip(false);
+        Video_Set_Tactical_3D_State(false, nullptr);
         Do_Win();
         Set_Video_Cursor_Clip(true);
     }
@@ -1726,6 +1729,7 @@ bool Main_Loop()
         PlayerRestarts = false;
         Map.Help_Text(TXT_NONE);
         Set_Video_Cursor_Clip(false);
+        Video_Set_Tactical_3D_State(false, nullptr);
         Do_Lose();
         Set_Video_Cursor_Clip(true);
     }
@@ -1736,6 +1740,7 @@ bool Main_Loop()
         PlayerRestarts = false;
         Map.Help_Text(TXT_NONE);
         Set_Video_Cursor_Clip(false);
+        Video_Set_Tactical_3D_State(false, nullptr);
         Do_Restart();
         Set_Video_Cursor_Clip(true);
     }
@@ -2127,6 +2132,7 @@ extern void Play_Movie_GlyphX(const char* movie_name, ThemeType theme);
 
 void Play_Movie(char const* name, ThemeType theme, bool clrscrn)
 {
+    Video_Set_Tactical_3D_State(false, nullptr);
 #if REMASTER_BUILD
     if (strcmp(name, "x") == 0 || strcmp(name, "X") == 0) {
         return;

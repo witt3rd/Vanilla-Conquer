@@ -119,4 +119,21 @@ void Video_Set_Ultra_Menu_State(bool active,
                                 const char* version_text = nullptr,
                                 int mode = 1);
 
+struct Tactical3DUBOData
+{
+    float view_params0[4];        // x=time, y=tac_u0, z=tac_v0, w=tac_u1
+    float view_params1[4];        // x=tac_v1, y=sub_cell_x, z=sub_cell_y, w=cells_wide
+    float view_params2[4];        // x=cells_high, y=origin_cell_x, z=origin_cell_y, w=theater
+    float view_params3[4];        // x=entity_count, y=light_count, z=player_house, w=palette_fade
+    float overlay_rects[4][4];    // [0]=rubber_band, [1]=dialog_rect, [2]=tooltip_rect, [3]=aux_ui
+    uint32_t cell_grid[150][4];   // 30 x 20 cells = 600 uints
+    float ent_data0[128][4];      // x=wx, y=wy, z=alt, w=packed_type
+    float ent_data1[128][4];      // x=hull_yaw, y=turret_yaw, z=health_and_flags, w=footprint_and_aux
+    float light_pos_rad[32][4];   // x=wx, y=wy, z=wz, w=radius
+    float light_col_int[32][4];   // x=r, y=g, z=b, w=intensity
+};
+
+void Video_Set_Tactical_3D_State(bool active, const Tactical3DUBOData* data = nullptr);
+void Video_Set_Tactical_Dialog_Rect(int x, int y, int w, int h);
+
 #endif // VIDEO_H

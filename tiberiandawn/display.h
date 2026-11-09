@@ -145,6 +145,7 @@ public:
     */
     virtual void AI(KeyNumType& input, int x, int y);
     virtual void Draw_It(bool complete = false);
+    void Update_Vulkan_Tactical_3D(void);
 
     /*
     **	Added functionality.

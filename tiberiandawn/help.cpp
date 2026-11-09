@@ -258,6 +258,8 @@ void HelpClass::Help_Text(int text, int x, int y, int color, bool quick, int cos
  * HISTORY:                                                                                    *
  *   11/18/1994 JLB : Created.                                                                 *
  *=============================================================================================*/
+int ActiveTooltipRect[4] = {0, 0, -1, -1};
+
 void HelpClass::Draw_It(bool forced)
 {
     TabClass::Draw_It(forced);
@@ -269,6 +271,7 @@ void HelpClass::Draw_It(bool forced)
             //		Fancy_Text_Print(Text, DrawX, DrawY, Color, BLACK, TPF_6POINT|TPF_NOSHADOW);
             Fancy_Text_Print(Text, DrawX, DrawY, Color, BLACK, TPF_MAP | TPF_NOSHADOW);
             LogicPage->Draw_Rect(DrawX - 1, DrawY - 1, DrawX + Width + 1, DrawY + FontHeight, Color);
+            int totalH = FontHeight + 2;
 
             if (Cost) {
                 char buffer[15];
@@ -281,10 +284,19 @@ void HelpClass::Draw_It(bool forced)
                     DrawX - 1, DrawY + FontHeight, DrawX + width + 1, DrawY + FontHeight + FontHeight - 1, Color);
                 LogicPage->Draw_Line(
                     DrawX, DrawY + FontHeight, DrawX + MIN(width + 1, Width) - 1, DrawY + FontHeight, BLACK);
+                totalH = FontHeight * 2 + 2;
             }
+
+            ActiveTooltipRect[0] = DrawX - 1;
+            ActiveTooltipRect[1] = DrawY - 1;
+            ActiveTooltipRect[2] = DrawX + Width + 2;
+            ActiveTooltipRect[3] = DrawY - 1 + totalH;
 
             LogicPage->Unlock();
         }
+    } else {
+        ActiveTooltipRect[2] = -1;
+        ActiveTooltipRect[3] = -1;
     }
     //	if (!In_Debugger) HidPage.Unlock();
 }

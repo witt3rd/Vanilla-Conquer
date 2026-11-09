@@ -189,6 +189,11 @@ static const uint32_t kUltraMenuFragSpv[] = {
 #include "shaders/ultra_menu_frag_spv.inc"
 };
 
+// Embedded SPIR-V for Native-4K 3D Tactical Battlefield Shader
+static const uint32_t kTactical3DFragSpv[] = {
+#include "shaders/tactical_3d_frag_spv.inc"
+};
+
 /*=========================================================================*/
 /* Vulkan 1.3 Presentation State & Double-Buffered Staging Ring            */
 /*=========================================================================*/
@@ -220,6 +225,16 @@ struct UltraMenuRuntimeState
 
 static UltraMenuRuntimeState ultraMenuState;
 
+struct Tactical3DRuntimeState
+{
+    bool active{false};
+    Tactical3DUBOData ubo{};
+    float dialogRect[4]{0.0f, 0.0f, -1.0f, -1.0f};
+    std::chrono::steady_clock::time_point startTime{std::chrono::steady_clock::now()};
+};
+
+static Tactical3DRuntimeState tactical3DState;
+
 struct VulkanFrameResources
 {
     VkCommandPool commandPool{VK_NULL_HANDLE};
@@ -235,6 +250,9 @@ struct VulkanFrameResources
     VkBuffer menuUboBuffer{VK_NULL_HANDLE};
     VkDeviceMemory menuUboMemory{VK_NULL_HANDLE};
     void* menuUboMapped{nullptr};
+    VkBuffer tacticalUboBuffer{VK_NULL_HANDLE};
+    VkDeviceMemory tacticalUboMemory{VK_NULL_HANDLE};
+    void* tacticalUboMapped{nullptr};
     VkDescriptorSet descriptorSet{VK_NULL_HANDLE};
 };
 
@@ -287,8 +305,10 @@ struct VulkanBackendContext
     VkShaderModule vertShader{VK_NULL_HANDLE};
     VkShaderModule fragShader{VK_NULL_HANDLE};
     VkShaderModule ultraMenuFragShader{VK_NULL_HANDLE};
+    VkShaderModule tactical3DFragShader{VK_NULL_HANDLE};
     VkPipeline presentPipeline{VK_NULL_HANDLE};
     VkPipeline ultraMenuPipeline{VK_NULL_HANDLE};
+    VkPipeline tactical3DPipeline{VK_NULL_HANDLE};
 
     // Synchronization & Frame Ring
     VkSemaphore timelineSemaphore{VK_NULL_HANDLE};
@@ -693,7 +713,12 @@ static bool Ensure_Framebuffer_Texture(uint32_t w, uint32_t h)
         menuUboDesc.offset = 0;
         menuUboDesc.range = sizeof(UltraMenuUBOData);
 
-        VkWriteDescriptorSet writes[4]{};
+        VkDescriptorBufferInfo tacUboDesc{};
+        tacUboDesc.buffer = fr.tacticalUboBuffer;
+        tacUboDesc.offset = 0;
+        tacUboDesc.range = sizeof(Tactical3DUBOData);
+
+        VkWriteDescriptorSet writes[5]{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = fr.descriptorSet;
         writes[0].dstBinding = 0;
@@ -722,7 +747,14 @@ static bool Ensure_Framebuffer_Texture(uint32_t w, uint32_t h)
         writes[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         writes[3].pBufferInfo = &menuUboDesc;
 
-        vkUpdateDescriptorSets(vkCtx.device, 4, writes, 0, nullptr);
+        writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[4].dstSet = fr.descriptorSet;
+        writes[4].dstBinding = 4;
+        writes[4].descriptorCount = 1;
+        writes[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[4].pBufferInfo = &tacUboDesc;
+
+        vkUpdateDescriptorSets(vkCtx.device, 5, writes, 0, nullptr);
     }
 
     return true;
@@ -999,6 +1031,11 @@ static bool Create_Present_Pipeline()
         vkCreateGraphicsPipelines(vkCtx.device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &vkCtx.ultraMenuPipeline);
     }
 
+    if (vkCtx.tactical3DFragShader) {
+        stages[1].module = vkCtx.tactical3DFragShader;
+        vkCreateGraphicsPipelines(vkCtx.device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &vkCtx.tactical3DPipeline);
+    }
+
     return true;
 }
 
@@ -1138,8 +1175,8 @@ static bool Initialize_Vulkan_Backend(int gameW, int gameH)
         return false;
     }
 
-    // Descriptor Set Layout (binding 0: usampler2D, binding 1: PaletteUBO, binding 2: sampler2D, binding 3: UltraMenuUBO)
-    VkDescriptorSetLayoutBinding bindings[4]{};
+    // Descriptor Set Layout (binding 0: usampler2D, binding 1: PaletteUBO, binding 2: sampler2D, binding 3: UltraMenuUBO, binding 4: Tactical3DUBO)
+    VkDescriptorSetLayoutBinding bindings[5]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[0].descriptorCount = 1;
@@ -1160,9 +1197,14 @@ static bool Initialize_Vulkan_Backend(int gameW, int gameH)
     bindings[3].descriptorCount = 1;
     bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    bindings[4].binding = 4;
+    bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[4].descriptorCount = 1;
+    bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
     VkDescriptorSetLayoutCreateInfo dslInfo{};
     dslInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    dslInfo.bindingCount = 4;
+    dslInfo.bindingCount = 5;
     dslInfo.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(vkCtx.device, &dslInfo, nullptr, &vkCtx.descriptorSetLayout) != VK_SUCCESS) {
         return false;
@@ -1172,7 +1214,7 @@ static bool Initialize_Vulkan_Backend(int gameW, int gameH)
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     poolSizes[0].descriptorCount = kMaxFramesInFlight * 2;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[1].descriptorCount = kMaxFramesInFlight * 2;
+    poolSizes[1].descriptorCount = kMaxFramesInFlight * 3;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1225,6 +1267,12 @@ static bool Initialize_Vulkan_Backend(int gameW, int gameH)
     menuFragModInfo.codeSize = sizeof(kUltraMenuFragSpv);
     menuFragModInfo.pCode = kUltraMenuFragSpv;
     vkCreateShaderModule(vkCtx.device, &menuFragModInfo, nullptr, &vkCtx.ultraMenuFragShader);
+
+    VkShaderModuleCreateInfo tacFragModInfo{};
+    tacFragModInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    tacFragModInfo.codeSize = sizeof(kTactical3DFragSpv);
+    tacFragModInfo.pCode = kTactical3DFragSpv;
+    vkCreateShaderModule(vkCtx.device, &tacFragModInfo, nullptr, &vkCtx.tactical3DFragShader);
 
     if (!Create_Present_Pipeline()) {
         return false;
@@ -1286,6 +1334,15 @@ static bool Initialize_Vulkan_Backend(int gameW, int gameH)
                            &fr.menuUboMapped)) {
             return false;
         }
+
+        if (!Create_Buffer(sizeof(Tactical3DUBOData),
+                           VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           fr.tacticalUboBuffer,
+                           fr.tacticalUboMemory,
+                           &fr.tacticalUboMapped)) {
+            return false;
+        }
     }
 
     vkCtx.initialized = true;
@@ -1319,16 +1376,21 @@ static void Shutdown_Vulkan_Backend()
             if (fr.menuUboMapped) vkUnmapMemory(vkCtx.device, fr.menuUboMemory);
             if (fr.menuUboBuffer) vkDestroyBuffer(vkCtx.device, fr.menuUboBuffer, nullptr);
             if (fr.menuUboMemory) vkFreeMemory(vkCtx.device, fr.menuUboMemory, nullptr);
+            if (fr.tacticalUboMapped) vkUnmapMemory(vkCtx.device, fr.tacticalUboMemory);
+            if (fr.tacticalUboBuffer) vkDestroyBuffer(vkCtx.device, fr.tacticalUboBuffer, nullptr);
+            if (fr.tacticalUboMemory) vkFreeMemory(vkCtx.device, fr.tacticalUboMemory, nullptr);
             if (fr.imageAcquiredSemaphore) vkDestroySemaphore(vkCtx.device, fr.imageAcquiredSemaphore, nullptr);
             if (fr.commandPool) vkDestroyCommandPool(vkCtx.device, fr.commandPool, nullptr);
             fr = VulkanFrameResources{};
         }
 
+        if (vkCtx.tactical3DPipeline) vkDestroyPipeline(vkCtx.device, vkCtx.tactical3DPipeline, nullptr);
         if (vkCtx.ultraMenuPipeline) vkDestroyPipeline(vkCtx.device, vkCtx.ultraMenuPipeline, nullptr);
         if (vkCtx.presentPipeline) vkDestroyPipeline(vkCtx.device, vkCtx.presentPipeline, nullptr);
         if (vkCtx.vertShader) vkDestroyShaderModule(vkCtx.device, vkCtx.vertShader, nullptr);
         if (vkCtx.fragShader) vkDestroyShaderModule(vkCtx.device, vkCtx.fragShader, nullptr);
         if (vkCtx.ultraMenuFragShader) vkDestroyShaderModule(vkCtx.device, vkCtx.ultraMenuFragShader, nullptr);
+        if (vkCtx.tactical3DFragShader) vkDestroyShaderModule(vkCtx.device, vkCtx.tactical3DFragShader, nullptr);
         if (vkCtx.pipelineLayout) vkDestroyPipelineLayout(vkCtx.device, vkCtx.pipelineLayout, nullptr);
         if (vkCtx.descriptorPool) vkDestroyDescriptorPool(vkCtx.device, vkCtx.descriptorPool, nullptr);
         if (vkCtx.descriptorSetLayout) vkDestroyDescriptorSetLayout(vkCtx.device, vkCtx.descriptorSetLayout, nullptr);
@@ -1483,10 +1545,12 @@ static void Execute_Pass2_SoftwareFramebuffer(VkCommandBuffer cmd, uint32_t imag
     scissor.extent = {static_cast<uint32_t>(vw), static_cast<uint32_t>(vh)};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    VkPipeline activePipe =
-        (ultraMenuState.active && vkCtx.menuTexLoaded && vkCtx.ultraMenuPipeline != VK_NULL_HANDLE)
-            ? vkCtx.ultraMenuPipeline
-            : vkCtx.presentPipeline;
+    VkPipeline activePipe = vkCtx.presentPipeline;
+    if (ultraMenuState.active && vkCtx.menuTexLoaded && vkCtx.ultraMenuPipeline != VK_NULL_HANDLE) {
+        activePipe = vkCtx.ultraMenuPipeline;
+    } else if (tactical3DState.active && vkCtx.tactical3DPipeline != VK_NULL_HANDLE) {
+        activePipe = vkCtx.tactical3DPipeline;
+    }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipe);
     vkCmdBindDescriptorSets(
         cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vkCtx.pipelineLayout, 0, 1, &vkCtx.frames[frameIdx].descriptorSet, 0, nullptr);
@@ -1879,6 +1943,26 @@ public:
             ultraMenuState.ubo.params1[3] = std::min(1.0f, std::max(0.0f, maxPalComp));
 
             std::memcpy(fr.menuUboMapped, &ultraMenuState.ubo, sizeof(UltraMenuUBOData));
+        }
+
+        // Update Tactical 3D live UBO (time, palette fade, and active dialog overlay rect)
+        if (fr.tacticalUboMapped && tactical3DState.active) {
+            auto now = std::chrono::steady_clock::now();
+            float elapsed = std::chrono::duration<float>(now - tactical3DState.startTime).count();
+            tactical3DState.ubo.view_params0[0] = elapsed;
+
+            float maxPalComp = 0.0f;
+            for (int pi = 1; pi < 255; ++pi) {
+                maxPalComp = std::max(maxPalComp, vkCtx.currentPalette.colors[pi][0]);
+                maxPalComp = std::max(maxPalComp, vkCtx.currentPalette.colors[pi][1]);
+                maxPalComp = std::max(maxPalComp, vkCtx.currentPalette.colors[pi][2]);
+            }
+            tactical3DState.ubo.view_params3[3] = std::min(1.0f, std::max(0.0f, maxPalComp));
+            for (int k = 0; k < 4; ++k) {
+                tactical3DState.ubo.overlay_rects[1][k] = tactical3DState.dialogRect[k];
+            }
+
+            std::memcpy(fr.tacticalUboMapped, &tactical3DState.ubo, sizeof(Tactical3DUBOData));
         }
 
         uint32_t imageIndex = 0;
@@ -2422,3 +2506,32 @@ void Video_Set_Ultra_Menu_State(bool active,
     Pack_ASCII_To_UVec4_Pair(version_text, ultraMenuState.ubo.ver_chars, verLen);
     ultraMenuState.ubo.ver_info[0] = static_cast<float>(verLen);
 }
+
+void Video_Set_Tactical_3D_State(bool active, const Tactical3DUBOData* data)
+{
+    if (active && !tactical3DState.active) {
+        tactical3DState.startTime = std::chrono::steady_clock::now();
+    }
+    tactical3DState.active = active;
+    if (active && data != nullptr) {
+        tactical3DState.ubo = *data;
+    }
+}
+
+void Video_Set_Tactical_Dialog_Rect(int x, int y, int w, int h)
+{
+    int gw = hwcursor.GameW > 0 ? hwcursor.GameW : 640;
+    int gh = hwcursor.GameH > 0 ? hwcursor.GameH : 400;
+    if (w > 0 && h > 0) {
+        tactical3DState.dialogRect[0] = static_cast<float>(x) / static_cast<float>(gw);
+        tactical3DState.dialogRect[1] = static_cast<float>(y) / static_cast<float>(gh);
+        tactical3DState.dialogRect[2] = static_cast<float>(x + w) / static_cast<float>(gw);
+        tactical3DState.dialogRect[3] = static_cast<float>(y + h) / static_cast<float>(gh);
+    } else {
+        tactical3DState.dialogRect[0] = 0.0f;
+        tactical3DState.dialogRect[1] = 0.0f;
+        tactical3DState.dialogRect[2] = -1.0f;
+        tactical3DState.dialogRect[3] = -1.0f;
+    }
+}
+
