@@ -87,6 +87,164 @@ extern bool Server_Remote_Connect(void);
 extern bool Client_Remote_Connect(void);
 
 /***********************************************************************************************
+ * Synthesize_Scaled_12Font -- Builds a clean 12x12 high-res font from DOS GRAD6FNT.FNT.       *
+ *                                                                                             *
+ *    Westwood's C&C95 12GRNGRD.FNT and 12GREEN.FNT in CCLOCAL.MIX/UPDATEC.MIX were compiled   *
+ *    from a vertically misaligned sprite sheet (bleeding top scanlines and truncating widths  *
+ *    on 'O', 'B', 'C', etc.). When the corrupted asset is detected (width['O'] == 8), this    *
+ *    routine synthesizes a clean 2x scaled 12-point font from the uncorrupted DOS 6-point     *
+ *    GRAD6FNT.FNT in LOCAL.MIX.                                                               *
+ *=============================================================================================*/
+static bool Is_Corrupted_12Font(void const* font_ptr)
+{
+    if (!font_ptr) {
+        return false;
+    }
+    const unsigned char* data = static_cast<const unsigned char*>(font_ptr);
+    unsigned short w_off = 0;
+    memcpy(&w_off, data + 8, sizeof(unsigned short));
+    w_off = le16toh(w_off);
+    return data[w_off + 'O'] == 8;
+}
+
+static void* Synthesize_Scaled_12Font(void const* dos_font_ptr, bool solid_green)
+{
+    if (!dos_font_ptr) {
+        return nullptr;
+    }
+    const unsigned char* dos_data = static_cast<const unsigned char*>(dos_font_ptr);
+    unsigned short d_off = 0, w_off = 0, h_off = 0;
+    memcpy(&d_off, dos_data + 6, sizeof(unsigned short));
+    memcpy(&w_off, dos_data + 8, sizeof(unsigned short));
+    memcpy(&h_off, dos_data + 12, sizeof(unsigned short));
+    d_off = le16toh(d_off);
+    w_off = le16toh(w_off);
+    h_off = le16toh(h_off);
+
+    const int num_chars = (w_off - d_off) / 2;
+    if (num_chars <= 0 || num_chars > 256) {
+        return nullptr;
+    }
+
+    static const int y_heights[8] = {1, 2, 2, 2, 2, 2, 1, 1};
+    const unsigned short header_size = 20;
+    const unsigned short out_d_off = header_size;
+    const unsigned short out_w_off = out_d_off + num_chars * 2;
+    const unsigned short out_b_off = out_w_off + num_chars;
+
+    // Maximum possible size is < 16 KB
+    unsigned char* out = new (MEM_CLEAR | MEM_REAL) unsigned char[16384];
+    unsigned short cur_data_off = out_b_off;
+
+    for (int ch = 0; ch < num_chars; ++ch) {
+        unsigned char w_dos = dos_data[w_off + ch];
+        unsigned short do_dos = 0;
+        memcpy(&do_dos, dos_data + d_off + ch * 2, sizeof(unsigned short));
+        do_dos = le16toh(do_dos);
+        unsigned char ypos_dos = dos_data[h_off + ch * 2];
+        unsigned char lines_dos = dos_data[h_off + ch * 2 + 1];
+
+        unsigned short do_le = htole16(cur_data_off);
+        memcpy(out + out_d_off + ch * 2, &do_le, sizeof(unsigned short));
+
+        if (w_dos == 0 || lines_dos == 0) {
+            out[out_w_off + ch] = static_cast<unsigned char>(w_dos * 2);
+            continue;
+        }
+
+        int bpl_dos = (w_dos + 1) / 2;
+        unsigned char w_new = (w_dos == 8) ? 12 : static_cast<unsigned char>((w_dos - 1) * 2);
+        int bpl_new = (w_new + 1) / 2;
+        out[out_w_off + ch] = w_new;
+
+        for (int r = 0; r < lines_dos; ++r) {
+            unsigned char row[16] = {0};
+            for (int col = 0; col < w_dos && col < 16; ++col) {
+                unsigned char byte = dos_data[do_dos + r * bpl_dos + (col / 2)];
+                unsigned char nib = (col % 2 == 0) ? (byte & 0x0F) : ((byte >> 4) & 0x0F);
+                if (solid_green && nib >= 11 && nib <= 15) {
+                    nib = 1;
+                }
+                row[col] = nib;
+            }
+
+            unsigned char expanded[16] = {0};
+            if (w_dos == 8) {
+                expanded[0] = row[0];
+                for (int c = 1; c <= 5; ++c) {
+                    expanded[(c - 1) * 2 + 1] = row[c];
+                    expanded[(c - 1) * 2 + 2] = row[c];
+                }
+                expanded[11] = row[6];
+            } else {
+                for (int c = 0; c < w_dos - 1 && c * 2 + 1 < 16; ++c) {
+                    expanded[c * 2] = row[c];
+                    expanded[c * 2 + 1] = row[c];
+                }
+            }
+
+            int y_idx = (ypos_dos + r < 8) ? (ypos_dos + r) : 7;
+            int rep_y = y_heights[y_idx];
+            for (int ry = 0; ry < rep_y; ++ry) {
+                for (int b = 0; b < bpl_new; ++b) {
+                    unsigned char lo = (b * 2 < w_new) ? expanded[b * 2] : 0;
+                    unsigned char hi = (b * 2 + 1 < w_new) ? expanded[b * 2 + 1] : 0;
+                    out[cur_data_off++] = static_cast<unsigned char>((lo & 0x0F) | ((hi & 0x0F) << 4));
+                }
+            }
+        }
+    }
+
+    unsigned short out_h_off = cur_data_off;
+    for (int ch = 0; ch < num_chars; ++ch) {
+        unsigned char w_dos = dos_data[w_off + ch];
+        unsigned char ypos_dos = dos_data[h_off + ch * 2];
+        unsigned char lines_dos = dos_data[h_off + ch * 2 + 1];
+        if (w_dos == 0 || lines_dos == 0) {
+            out[out_h_off + ch * 2] = 0;
+            out[out_h_off + ch * 2 + 1] = 0;
+            continue;
+        }
+        int ypos_new = 2;
+        for (int i = 0; i < ypos_dos && i < 8; ++i) {
+            ypos_new += y_heights[i];
+        }
+        int lines_new = 0;
+        for (int r = 0; r < lines_dos; ++r) {
+            int y_idx = (ypos_dos + r < 8) ? (ypos_dos + r) : 7;
+            lines_new += y_heights[y_idx];
+        }
+        out[out_h_off + ch * 2] = static_cast<unsigned char>(ypos_new);
+        out[out_h_off + ch * 2 + 1] = static_cast<unsigned char>(lines_new);
+    }
+
+    unsigned short total_len = static_cast<unsigned short>(out_h_off + num_chars * 2);
+    unsigned short len_le = htole16(total_len);
+    unsigned short i_off_le = htole16(0x000E);
+    unsigned short d_off_le = htole16(out_d_off);
+    unsigned short w_off_le = htole16(out_w_off);
+    unsigned short b_off_le = htole16(out_b_off);
+    unsigned short h_off_le = htole16(out_h_off);
+    unsigned short u_const_le = htole16(0x1012);
+
+    memcpy(out + 0, &len_le, 2);
+    out[2] = 0;
+    out[3] = 5;
+    memcpy(out + 4, &i_off_le, 2);
+    memcpy(out + 6, &d_off_le, 2);
+    memcpy(out + 8, &w_off_le, 2);
+    memcpy(out + 10, &b_off_le, 2);
+    memcpy(out + 12, &h_off_le, 2);
+    memcpy(out + 14, &u_const_le, 2);
+    out[16] = 0;
+    out[17] = static_cast<unsigned char>(num_chars - 1);
+    out[18] = 15;
+    out[19] = 12;
+
+    return out;
+}
+
+/***********************************************************************************************
  * Init_Game -- Main game initialization routine.                                              *
  *                                                                                             *
  *    Perform all one-time game initializations here. This includes all                        *
@@ -173,6 +331,7 @@ bool Init_Game(int, char*[])
     */
     CCDebugString("C&C95 - About to register CCLOCAL.MIX\n");
 
+    void* dos_grad6fnt = nullptr;
     if (Is_Demo()) {
         CCDebugString("C&C95 - Detected running as demo, about to register DEMOL.MIX\n");
         RequiredCD = -2;
@@ -189,6 +348,18 @@ bool Init_Game(int, char*[])
         */
 
         if (Get_Resolution_Factor()) {
+            new MFCD("LOCAL.MIX");
+            if (MFCD::Cache("LOCAL.MIX")) {
+                void const* dos_ptr = MFCD::Retrieve("GRAD6FNT.FNT");
+                if (dos_ptr) {
+                    unsigned short dos_len = 0;
+                    memcpy(&dos_len, dos_ptr, sizeof(unsigned short));
+                    dos_len = le16toh(dos_len);
+                    dos_grad6fnt = new (MEM_CLEAR | MEM_REAL) unsigned char[dos_len];
+                    memcpy(dos_grad6fnt, dos_ptr, dos_len);
+                }
+            }
+            MFCD::Free("LOCAL.MIX");
             new MFCD("CCLOCAL.MIX"); // Cached.
             MFCD::Cache("CCLOCAL.MIX");
         } else {
@@ -231,12 +402,21 @@ bool Init_Game(int, char*[])
         MapFontPtr = Load_Alloc_Data(CCFileClass("8FAT.FNT"));
         Green12FontPtr = Load_Alloc_Data(CCFileClass("12GREEN.FNT"));
         Green12GradFontPtr = Load_Alloc_Data(CCFileClass("12GRNGRD.FNT"));
-        ScoreFontPtr = Load_Alloc_Data(CCFileClass("12GRNGRD.FNT"));
+        if (dos_grad6fnt && Is_Corrupted_12Font(Green12FontPtr)) {
+            Green12FontPtr = Synthesize_Scaled_12Font(dos_grad6fnt, true);
+        }
+        if (dos_grad6fnt && Is_Corrupted_12Font(Green12GradFontPtr)) {
+            Green12GradFontPtr = Synthesize_Scaled_12Font(dos_grad6fnt, false);
+        }
+        ScoreFontPtr = Green12GradFontPtr;
     } else {
         MapFontPtr = Font6Ptr; // Fixes ingame helpbox
         Green12FontPtr = Font3Ptr;
         Green12GradFontPtr = GradFont6Ptr;
         ScoreFontPtr = GradFont6Ptr;
+    }
+    if (dos_grad6fnt) {
+        delete[] static_cast<unsigned char*>(dos_grad6fnt);
     }
 
     CCDebugString("C&C95 - About to set palette\n");
