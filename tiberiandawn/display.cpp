@@ -2741,7 +2741,21 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         }
     }
 
-    // 3. Extract 3D Articulated Vehicles (Units + Hovercraft Deck Cargo)
+    // 3. Extract 3D Articulated Vehicles (Units + Hovercraft Deck Cargo) with Stage 5 Continuous Kinematic Interpolation
+    struct SmoothKinematicState {
+        bool valid{false};
+        float gx{0.0f};
+        float gy{0.0f};
+        float hullYaw{0.0f};
+        float turYaw{0.0f};
+    };
+    static SmoothKinematicState s_smoothUnits[256];
+    static SmoothKinematicState s_smoothInfantry[256];
+    auto lerpAngle = [](float cur, float target, float alpha) -> float {
+        float diff = std::atan2(std::sin(target - cur), std::cos(target - cur));
+        return cur + diff * alpha;
+    };
+
     for (int i = 0; i < Units.Count() && entCount < 128; ++i) {
         UnitClass* u = Units.Ptr(i);
         if (!u || !u->IsActive || u->IsInLimbo || !u->Class) continue;
@@ -2752,8 +2766,55 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
             continue;
         }
 
-        float wx = toLocalCellX(center);
-        float wy = toLocalCellY(center);
+        float rawGx = static_cast<float>(Coord_X(center)) / 256.0f;
+        float rawGy = static_cast<float>(Coord_Y(center)) / 256.0f;
+        float rawHullYaw = static_cast<float>(u->PrimaryFacing.Current()) * kDirToRad;
+        float rawTurYaw =
+            static_cast<float>(u->Class->IsTurretEquipped ? u->SecondaryFacing.Current() : u->PrimaryFacing.Current()) *
+            kDirToRad;
+
+        // Stage 5: Local Continuous Separation / RVO-lite steering away from nearby ground vehicles
+        float sepX = 0.0f, sepY = 0.0f;
+        for (int j = 0; j < Units.Count(); ++j) {
+            if (j == i) continue;
+            UnitClass* o = Units.Ptr(j);
+            if (!o || !o->IsActive || o->IsInLimbo) continue;
+            float dx = rawGx - static_cast<float>(Coord_X(o->Center_Coord())) / 256.0f;
+            float dy = rawGy - static_cast<float>(Coord_Y(o->Center_Coord())) / 256.0f;
+            float d2 = dx * dx + dy * dy;
+            if (d2 > 1e-5f && d2 < 0.36f) {
+                float d = std::sqrt(d2);
+                float push = (0.60f - d) * 0.18f;
+                sepX += (dx / d) * push;
+                sepY += (dy / d) * push;
+            }
+        }
+        rawGx += sepX;
+        rawGy += sepY;
+
+        if (i < 256) {
+            SmoothKinematicState& st = s_smoothUnits[i];
+            float jump2 = (rawGx - st.gx) * (rawGx - st.gx) + (rawGy - st.gy) * (rawGy - st.gy);
+            if (!st.valid || jump2 > 4.0f) {
+                st.valid = true;
+                st.gx = rawGx;
+                st.gy = rawGy;
+                st.hullYaw = rawHullYaw;
+                st.turYaw = rawTurYaw;
+            } else {
+                st.gx += (rawGx - st.gx) * 0.30f;
+                st.gy += (rawGy - st.gy) * 0.30f;
+                st.hullYaw = lerpAngle(st.hullYaw, rawHullYaw, 0.32f);
+                st.turYaw = lerpAngle(st.turYaw, rawTurYaw, 0.35f);
+            }
+            rawGx = st.gx;
+            rawGy = st.gy;
+            rawHullYaw = st.hullYaw;
+            rawTurYaw = st.turYaw;
+        }
+
+        float wx = rawGx - static_cast<float>(baseCellX);
+        float wy = rawGy - static_cast<float>(baseCellY);
         if (!inTacticalMargin(wx, wy, 1.8f)) continue;
 
         int subType = std::max(0, std::min(127, static_cast<int>(*u)));
@@ -2768,10 +2829,8 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         if (u->IsHarvesting || u->Mission == MISSION_HARVEST) flags |= 32;
 
         float health = std::max(0.01f, std::min(0.999f, static_cast<float>(u->Health_Ratio()) / 256.0f));
-        float hullYaw = static_cast<float>(u->PrimaryFacing.Current()) * kDirToRad;
-        float turYaw =
-            static_cast<float>(u->Class->IsTurretEquipped ? u->SecondaryFacing.Current() : u->PrimaryFacing.Current()) *
-            kDirToRad;
+        float hullYaw = rawHullYaw;
+        float turYaw = rawTurYaw;
 
         ubo.ent_data0[entCount][0] = wx;
         ubo.ent_data0[entCount][1] = wy;
@@ -3019,6 +3078,8 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
 
     // 8b. Optional Coastal Beachhead Battle Showcase (when CNC_AUTO_SHOWCASE=1)
     if (std::getenv("CNC_AUTO_SHOWCASE") != nullptr) {
+        entCount = 0;
+        lightCount = 0;
         auto addShowcaseEnt = [&](float wx, float wy, float alt, int cat, int subType, int houseId,
                                   float hullYaw, float turYaw, float hp, int flags, float aux) {
             if (entCount >= 128) return;
@@ -3033,24 +3094,48 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
             ubo.ent_data1[entCount][3] = aux;
             entCount++;
         };
-        // GDI Amphibious Landing Task Force (M1A2 Abrams tanks, MCV, Humvees, Hovercraft, Gunboat, Infantry)
-        addShowcaseEnt(11.4f, 6.4f, 0.0f, 0, UNIT_MTANK,   0, 0.45f, 0.32f, 0.98f, 1 | 2, 18.0f); // Selected M1A2 Abrams on beachhead
-        addShowcaseEnt(9.4f,  7.2f, 0.0f, 0, UNIT_MTANK,   0, 0.38f, 0.28f, 0.92f, 0,     18.0f); // Wingman M1A2 Abrams on beachhead
-        addShowcaseEnt(13.6f, 6.9f, 0.0f, 0, UNIT_MCV,     0, 0.15f, 0.15f, 0.99f, 0,     18.0f); // GDI MCV on beachhead road
-        addShowcaseEnt(15.2f, 6.2f, 0.0f, 0, UNIT_JEEP,    0, 0.52f, 0.40f, 0.95f, 2,     18.0f); // Humvee scout on coastal road
-        addShowcaseEnt(10.6f, 7.6f, 0.0f, 2, INFANTRY_E1,  0, 0.35f, 0.35f, 0.99f, 0,      1.0f); // Rifle Infantry advancing
-        addShowcaseEnt(12.3f, 7.5f, 0.0f, 2, INFANTRY_E3,  0, 0.25f, 0.25f, 0.99f, 0,      1.0f); // Rocket Soldier advancing
-        addShowcaseEnt(12.4f, 9.2f, 0.0f, 0, UNIT_HOVER,   0, 0.10f, 0.10f, 0.99f, 0,     18.0f); // LCAC Hovercraft beaching in surf
-        addShowcaseEnt(16.8f, 12.2f,0.0f, 0, UNIT_GUNBOAT, 0, 1.45f, 0.25f, 0.99f, 2,     18.0f); // Naval Gunboat offshore in ocean
-        // Coastal Plateau Base Compound (Radar Outpost, Power Plant, Command Complex)
-        addShowcaseEnt(6.2f,  3.2f, 0.0f, 1, STRUCT_RADAR, 0, 0.0f,  0.0f,  0.98f, 0,     18.0f); // Radar Outpost with rotating dish
-        addShowcaseEnt(9.2f,  2.8f, 0.0f, 1, STRUCT_POWER, 0, 0.0f,  0.0f,  0.95f, 0,     18.0f); // Power Plant with cooling tower
-        addShowcaseEnt(19.2f, 3.6f, 0.0f, 1, STRUCT_CONST, 1, 0.0f,  0.0f,  0.88f, 0,     18.0f); // Enemy Command Complex on east bluff
-        // Nod Coastal Ridge Defense + Active Combat Explosion & Billowing Black Smoke Plume
-        addShowcaseEnt(13.8f, 3.8f, 0.0f, 0, UNIT_LTANK,   1, 3.45f, 3.55f, 0.42f, 8,     18.0f); // Burning Nod Tank with black smoke
-        addShowcaseEnt(15.6f, 3.2f, 0.0f, 1, STRUCT_GTOWER,1, 0.0f,  3.60f, 0.65f, 8,      9.0f); // Damaged Guard Tower on cliff
-        addShowcaseEnt(13.9f, 3.9f, 0.18f,6, ANIM_FBALL1,  0, 0.22f, 0.0f,  0.99f, 0,     0.78f); // Blazing 3D Fireball + Smoke Column
-        addPointLight(13.9f, 3.9f, 0.40f, 4.8f, 1.0f, 0.55f, 0.16f, 2.8f);
+        // 1. Coastal Peninsula Industrial Military Compounds + Tall Lattice Radio Towers (CnC-Ultra-Game.jpg)
+        addShowcaseEnt(5.8f,  6.2f, 0.0f, 1, STRUCT_WEAP,     0, 1.0f, 0.0f, 0.96f, 0, float(3 | (2 << 3))); // Main Left Industrial Complex + Tall Radio Tower
+        addShowcaseEnt(2.9f,  7.1f, 0.0f, 1, STRUCT_RADAR,    0, 1.0f, 0.0f, 0.94f, 0, float(2 | (2 << 3))); // Far-left Outpost + Antenna Mast
+        addShowcaseEnt(10.8f, 3.8f, 0.0f, 1, STRUCT_RADAR,    1, 1.0f, 0.0f, 0.92f, 0, float(2 | (2 << 3))); // Upper-Mid Ridge Communications Outpost + Tall Tower
+        addShowcaseEnt(13.8f, 5.0f, 0.0f, 1, STRUCT_POWER,    1, 1.0f, 0.0f, 0.90f, 0, float(2 | (2 << 3))); // Eastern Cliff Outpost + Tower
+        addShowcaseEnt(8.6f,  5.5f, 0.0f, 1, STRUCT_REFINERY, 1, 1.0f, 0.0f, 0.35f, 8, float(3 | (2 << 3))); // Burning Base Complex in Center-Left
+        addShowcaseEnt(10.4f, 6.6f, 0.0f, 1, STRUCT_CONST,    1, 1.0f, 0.0f, 0.58f, 8, float(2 | (2 << 3))); // Adjacent Damaged Depot beside Fire
+
+        // 2. Central Sunken Concrete Bunker & Massive Lower-Right Concrete Naval Pier / Seawall Bastion
+        addShowcaseEnt(8.5f,  9.0f, 0.0f, 1, STRUCT_GTOWER,   0, 1.0f, 2.35f, 0.95f, 0, float(2 | (2 << 3))); // Central Sunken Concrete Pillbox Bunker
+        addShowcaseEnt(16.6f, 11.2f,0.0f, 1, 22,              0, 1.0f, 0.85f, 0.99f, 0, float(5 | (3 << 3))); // Massive Lower-Right Concrete Naval Pier & Bastion
+
+        // 3. Advancing Column of GDI M1A2 Abrams Tanks, Humvees & Infantry along the Coastal Road
+        addShowcaseEnt(9.4f,  12.8f,0.0f, 0, UNIT_MTANK,      0, -0.52f, -0.45f, 0.99f, 0,     18.0f); // Foreground M1A2 Abrams advancing NW up road
+        addShowcaseEnt(8.8f,  11.1f,0.0f, 0, UNIT_MTANK,      0, -0.48f, -0.38f, 0.98f, 0,     18.0f); // Second M1A2 Abrams on road
+        addShowcaseEnt(7.1f,  12.1f,0.0f, 0, UNIT_JEEP,       0, -0.55f, -0.45f, 0.96f, 0,     18.0f); // Left flank Humvee / Light Armor
+        addShowcaseEnt(7.2f,  9.6f, 0.0f, 0, UNIT_MTANK,      0, -0.42f, -0.30f, 0.95f, 0,     18.0f); // Tank beside concrete bunker
+        addShowcaseEnt(12.6f, 9.2f, 0.0f, 0, UNIT_MTANK,      0, -0.58f, -0.52f, 0.97f, 2,     18.0f); // Mid-road M1A2 Abrams firing NW
+        addShowcaseEnt(13.2f, 10.3f,0.0f, 0, UNIT_MTANK,      0, -0.54f, -0.48f, 0.99f, 0,     18.0f); // Pier-approach M1A2 Abrams
+        addShowcaseEnt(13.8f, 7.0f, 0.0f, 0, UNIT_LTANK,      1,  2.45f,  2.55f, 0.82f, 2,     18.0f); // Defending Tank on upper ridge road
+        addShowcaseEnt(9.8f,  7.7f, 0.0f, 0, UNIT_JEEP,       1,  2.35f,  2.40f, 0.76f, 2,     18.0f); // Defending Scout near burning compound
+
+        // Infantry squads fighting along the road
+        addShowcaseEnt(10.8f, 8.2f, 0.0f, 2, INFANTRY_E1,     0, -0.55f, -0.55f, 0.99f, 2,      1.0f);
+        addShowcaseEnt(11.4f, 8.6f, 0.0f, 2, INFANTRY_E3,     0, -0.50f, -0.50f, 0.99f, 2,      1.0f);
+        addShowcaseEnt(12.0f, 8.0f, 0.0f, 2, INFANTRY_E1,     1,  2.50f,  2.50f, 0.90f, 2,      1.0f);
+
+        // 4. Amphibious LCAC Hovercraft & Gunboats in the Crashing Surf (Bottom-Center Cove & Right Coastline)
+        addShowcaseEnt(14.3f, 14.2f,0.0f, 0, UNIT_HOVER,      0, -0.48f, -0.48f, 0.99f, 0,     18.0f); // Bottom-center LCAC Hovercraft in surf cove
+        addShowcaseEnt(18.5f, 9.4f, 0.0f, 0, UNIT_HOVER,      0, -1.10f, -1.10f, 0.98f, 0,     18.0f); // Upper-right offshore Landing Craft
+        addShowcaseEnt(19.6f, 11.3f,0.0f, 0, UNIT_GUNBOAT,    0, -1.20f, -1.05f, 0.99f, 0,     18.0f); // Lower-right offshore Gunboat / Craft
+
+        // 5. Coastal Pines & Craggy Boulders flanking the peninsula road
+        addShowcaseEnt(4.5f,  8.8f, 0.0f, 4, 0,               0,  0.0f,   0.0f,  0.99f, 0,      1.0f);
+        addShowcaseEnt(6.2f,  10.8f,0.0f, 4, 1,               0,  0.0f,   0.0f,  0.99f, 0,      1.0f);
+        addShowcaseEnt(11.2f, 11.6f,0.0f, 4, 0,               0,  0.0f,   0.0f,  0.99f, 0,      1.0f);
+        addShowcaseEnt(14.4f, 8.2f, 0.0f, 4, 1,               0,  0.0f,   0.0f,  0.99f, 0,      1.0f);
+
+        // 6. Blazing Base Fire + Towering Pyroclastic Black Smoke Column at (8.8, 5.6)
+        addShowcaseEnt(8.8f,  5.6f, 0.18f,6, ANIM_FBALL1,     0,  0.22f,  0.0f,  0.99f, 0,      0.92f);
+        addPointLight(8.8f,   5.6f, 0.45f, 4.8f, 1.0f, 0.48f, 0.08f, 1.45f);
+        addPointLight(11.2f,  8.1f, 0.25f, 3.2f, 1.0f, 0.72f, 0.28f, 1.35f);
     }
 
     int playerHouseId = PlayerPtr ? Map_House_To_Color_ID(PlayerPtr->Class->House) : 0;
@@ -3076,9 +3161,17 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
     float livePower = (PlayerPtr && PlayerPtr->Power > 0) ? static_cast<float>(PlayerPtr->Power) : 2100.0f;
     float liveDrain = (PlayerPtr && PlayerPtr->Drain > 0) ? static_cast<float>(PlayerPtr->Drain) : 1820.0f;
     float liveTiberium = (PlayerPtr && PlayerPtr->Tiberium > 0) ? static_cast<float>(PlayerPtr->Tiberium) : 560.0f;
-    int rawForce = PlayerPtr ? static_cast<int>(PlayerPtr->CurUnits + PlayerPtr->CurInfantry) : 12;
+    int rawForce = PlayerPtr ? static_cast<int>(PlayerPtr->CurUnits + PlayerPtr->CurInfantry) : 78;
     int curForce = std::max(1, rawForce);
-    int maxForce = PlayerPtr ? std::max<int>(curForce + 12, static_cast<int>(PlayerPtr->CurBuildings) * 10 + 30) : 50;
+    int maxForce = PlayerPtr ? std::max<int>(curForce + 12, static_cast<int>(PlayerPtr->CurBuildings) * 10 + 30) : 90;
+    if (std::getenv("CNC_AUTO_SHOWCASE") != nullptr) {
+        liveCredits = 3200.0f;
+        livePower = 2100.0f;
+        liveDrain = 1820.0f;
+        liveTiberium = 560.0f;
+        curForce = 78;
+        maxForce = 90;
+    }
 
     ObjectClass* inspectObj = (CurrentObject.Count() > 0) ? CurrentObject[0] : nullptr;
     if (!inspectObj) {

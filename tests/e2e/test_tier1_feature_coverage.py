@@ -349,6 +349,12 @@ def run_tier1_tests(target_milestone: str = "all", strict: bool = False) -> List
     lake_shim = "/home/dt/.local/share/mise/shims/lake"
     code_l, out_l, _ = run_command([lean_shim, "--version"], timeout=10.0)
     code_k, out_k, _ = run_command([lake_shim, "--version"], timeout=10.0)
+    if code_l != 0 or code_k != 0:
+        lean_direct = "/home/dt/.local/share/mise/installs/github-leanprover-lean4/4.35.0/bin/lean"
+        lake_direct = "/home/dt/.local/share/mise/installs/github-leanprover-lean4/4.35.0/bin/lake"
+        if os.path.exists(lean_direct) and os.path.exists(lake_direct):
+            code_l, out_l, _ = run_command([lean_direct, "--version"], timeout=10.0)
+            code_k, out_k, _ = run_command([lake_direct, "--version"], timeout=10.0)
 
     lean_dir = os.path.join(repo_root, "lean")
     lakefile = os.path.join(lean_dir, "lakefile.toml")

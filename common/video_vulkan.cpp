@@ -298,6 +298,12 @@ struct VulkanBackendContext
     VkImageView menuImageView{VK_NULL_HANDLE};
     VkSampler menuSampler{VK_NULL_HANDLE};
 
+    // High-Resolution Tileable PBR Material / Voronoi / Foam / Billow Atlas (binding = 5)
+    VkImage pbrImage{VK_NULL_HANDLE};
+    VkDeviceMemory pbrMemory{VK_NULL_HANDLE};
+    VkImageView pbrImageView{VK_NULL_HANDLE};
+    VkSampler pbrSampler{VK_NULL_HANDLE};
+
     // Descriptors & Graphics Pipelines
     VkDescriptorSetLayout descriptorSetLayout{VK_NULL_HANDLE};
     VkDescriptorPool descriptorPool{VK_NULL_HANDLE};
@@ -582,6 +588,251 @@ static bool Ensure_Menu_Texture()
     return true;
 }
 
+static void Destroy_PBR_Material_Texture()
+{
+    if (!vkCtx.device) return;
+    if (vkCtx.pbrImageView) {
+        vkDestroyImageView(vkCtx.device, vkCtx.pbrImageView, nullptr);
+        vkCtx.pbrImageView = VK_NULL_HANDLE;
+    }
+    if (vkCtx.pbrImage) {
+        vkDestroyImage(vkCtx.device, vkCtx.pbrImage, nullptr);
+        vkCtx.pbrImage = VK_NULL_HANDLE;
+    }
+    if (vkCtx.pbrMemory) {
+        vkFreeMemory(vkCtx.device, vkCtx.pbrMemory, nullptr);
+        vkCtx.pbrMemory = VK_NULL_HANDLE;
+    }
+}
+
+// Synthesize a seamlessly tileable 512x512 RGBA8 Multi-Scale Voronoi & PBR Material Atlas on CPU at startup:
+//   R = Fractured Coastal Granite & Sedimentary Cliff Micro-Height (F2-F1 sharp rock facets + strata)
+//   G = Scattered Beach/Road Pebbles, Gravel Scree & Soil Micro-Detail (1.0-F1 cobble domes + grit)
+//   B = Lacy Cellular Sea-Foam Web & Breaking Surf Bubble Network (multi-octave Voronoi cell walls)
+//   A = Pyroclastic Cauliflower Smoke Billow Lobes & Brushed Armor Micro-Grain
+static bool Ensure_PBR_Material_Texture()
+{
+    if (!vkCtx.initialized) return false;
+    if (vkCtx.pbrImageView != VK_NULL_HANDLE) return true;
+
+    constexpr uint32_t kPbrSize = 512;
+    constexpr int kGridMax = 64;
+    float featX[kGridMax][kGridMax];
+    float featY[kGridMax][kGridMax];
+    for (int gy = 0; gy < kGridMax; ++gy) {
+        for (int gx = 0; gx < kGridMax; ++gx) {
+            uint32_t h1 = static_cast<uint32_t>(gx * 374761393u + gy * 668265263u + 0x9E3779B9u);
+            h1 = (h1 ^ (h1 >> 13u)) * 1274126177u;
+            uint32_t h2 = static_cast<uint32_t>(gx * 1103515245u + gy * 12345u + 0x85EBCA6Bu);
+            h2 = (h2 ^ (h2 >> 13u)) * 1274126177u;
+            featX[gy][gx] = 0.12f + 0.76f * (static_cast<float>(h1 & 0xFFFFu) / 65535.0f);
+            featY[gy][gx] = 0.12f + 0.76f * (static_cast<float>(h2 & 0xFFFFu) / 65535.0f);
+        }
+    }
+
+    auto evalPeriodicVoronoi = [&](float u, float v, int period, int seedOff, float& outF1, float& outF2) {
+        float px = u * static_cast<float>(period);
+        float py = v * static_cast<float>(period);
+        int ix = static_cast<int>(std::floor(px));
+        int iy = static_cast<int>(std::floor(py));
+        float fx = px - static_cast<float>(ix);
+        float fy = py - static_cast<float>(iy);
+        float d1 = 10.0f;
+        float d2 = 10.0f;
+        int mask = period - 1;
+        for (int dy = -1; dy <= 1; ++dy) {
+            int cy = (((iy + dy + period) & mask) + seedOff) & (kGridMax - 1);
+            for (int dx = -1; dx <= 1; ++dx) {
+                int cx = (((ix + dx + period) & mask) + seedOff * 3) & (kGridMax - 1);
+                float rx = static_cast<float>(dx) + featX[cy][cx] - fx;
+                float ry = static_cast<float>(dy) + featY[cy][cx] - fy;
+                float d = rx * rx + ry * ry;
+                if (d < d1) {
+                    d2 = d1;
+                    d1 = d;
+                } else if (d < d2) {
+                    d2 = d;
+                }
+            }
+        }
+        outF1 = std::sqrt(d1);
+        outF2 = std::sqrt(d2);
+    };
+
+    std::vector<uint8_t> pixels(static_cast<size_t>(kPbrSize) * kPbrSize * 4u);
+    const float invSize = 1.0f / static_cast<float>(kPbrSize);
+
+    for (uint32_t y = 0; y < kPbrSize; ++y) {
+        float v = static_cast<float>(y) * invSize;
+        for (uint32_t x = 0; x < kPbrSize; ++x) {
+            float u = static_cast<float>(x) * invSize;
+
+            float f1_16 = 0.0f, f2_16 = 0.0f;
+            float f1_32 = 0.0f, f2_32 = 0.0f;
+            float f1_64 = 0.0f, f2_64 = 0.0f;
+            evalPeriodicVoronoi(u, v, 16, 0, f1_16, f2_16);
+            evalPeriodicVoronoi(u, v, 32, 11, f1_32, f2_32);
+            evalPeriodicVoronoi(u, v, 64, 29, f1_64, f2_64);
+
+            // Channel R: Fractured Coastal Granite & Sedimentary Cliff Micro-Height
+            float rockEdge16 = std::min(1.0f, (f2_16 - f1_16) * 1.85f);
+            float rockEdge32 = std::min(1.0f, (f2_32 - f1_32) * 2.10f);
+            float strata = 0.5f + 0.5f * std::sin((v * 12.0f + rockEdge16 * 0.35f) * 6.2831853f);
+            float chR = std::max(0.0f, std::min(1.0f, rockEdge16 * 0.52f + rockEdge32 * 0.32f + strata * 0.16f));
+
+            // Channel G: Scattered Beach/Road Pebbles, Gravel Scree & Soil Grain
+            float peb32 = std::max(0.0f, 1.0f - f1_32 * 1.45f);
+            float peb64 = std::max(0.0f, 1.0f - f1_64 * 1.55f);
+            uint32_t gritHash = (x * 1664525u + y * 1013904223u) ^ (x >> 3u);
+            float grit = static_cast<float>(gritHash & 0xFFu) / 255.0f;
+            float chG = std::max(0.0f, std::min(1.0f, peb32 * 0.45f + peb64 * 0.38f + grit * 0.17f));
+
+            // Channel B: Lacy Cellular Sea-Foam Web & Breaking Surf Bubble Network
+            float web16 = std::max(0.0f, 1.0f - (f2_16 - f1_16) * 4.2f);
+            float web32 = std::max(0.0f, 1.0f - (f2_32 - f1_32) * 4.8f);
+            float web64 = std::max(0.0f, 1.0f - (f2_64 - f1_64) * 5.2f);
+            float chB = std::max(0.0f, std::min(1.0f, web16 * 0.50f + web32 * 0.35f + web64 * 0.25f));
+
+            // Channel A: Pyroclastic Cauliflower Smoke Billow Lobes & Brushed Armor Grain
+            float lobe16 = std::max(0.0f, 1.0f - f1_16 * 1.15f);
+            float lobe32 = std::max(0.0f, 1.0f - f1_32 * 1.25f);
+            float chA = std::max(0.0f, std::min(1.0f, lobe16 * 0.55f + lobe32 * 0.30f + grit * 0.15f));
+
+            size_t idx = (static_cast<size_t>(y) * kPbrSize + x) * 4u;
+            pixels[idx + 0] = static_cast<uint8_t>(chR * 255.0f + 0.5f);
+            pixels[idx + 1] = static_cast<uint8_t>(chG * 255.0f + 0.5f);
+            pixels[idx + 2] = static_cast<uint8_t>(chB * 255.0f + 0.5f);
+            pixels[idx + 3] = static_cast<uint8_t>(chA * 255.0f + 0.5f);
+        }
+    }
+
+    VkImageCreateInfo imgInfo{};
+    imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imgInfo.imageType = VK_IMAGE_TYPE_2D;
+    imgInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imgInfo.extent.width = kPbrSize;
+    imgInfo.extent.height = kPbrSize;
+    imgInfo.extent.depth = 1;
+    imgInfo.mipLevels = 1;
+    imgInfo.arrayLayers = 1;
+    imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imgInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    if (vkCreateImage(vkCtx.device, &imgInfo, nullptr, &vkCtx.pbrImage) != VK_SUCCESS) {
+        return false;
+    }
+
+    VkMemoryRequirements memReqs{};
+    vkGetImageMemoryRequirements(vkCtx.device, vkCtx.pbrImage, &memReqs);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = Find_Memory_Type(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (allocInfo.memoryTypeIndex == UINT32_MAX ||
+        vkAllocateMemory(vkCtx.device, &allocInfo, nullptr, &vkCtx.pbrMemory) != VK_SUCCESS) {
+        Destroy_PBR_Material_Texture();
+        return false;
+    }
+
+    vkBindImageMemory(vkCtx.device, vkCtx.pbrImage, vkCtx.pbrMemory, 0);
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = vkCtx.pbrImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    if (vkCreateImageView(vkCtx.device, &viewInfo, nullptr, &vkCtx.pbrImageView) != VK_SUCCESS) {
+        Destroy_PBR_Material_Texture();
+        return false;
+    }
+
+    VkBuffer uploadBuf = VK_NULL_HANDLE;
+    VkDeviceMemory uploadMem = VK_NULL_HANDLE;
+    void* uploadMapped = nullptr;
+    if (!Create_Buffer(pixels.size(),
+                       VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                       uploadBuf,
+                       uploadMem,
+                       &uploadMapped)) {
+        Destroy_PBR_Material_Texture();
+        return false;
+    }
+    std::memcpy(uploadMapped, pixels.data(), pixels.size());
+    vkUnmapMemory(vkCtx.device, uploadMem);
+
+    VkCommandBuffer cmd = vkCtx.frames[0].commandBuffer;
+    vkResetCommandPool(vkCtx.device, vkCtx.frames[0].commandPool, 0);
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &beginInfo);
+
+    VkImageMemoryBarrier2 toTransfer{};
+    toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    toTransfer.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+    toTransfer.srcAccessMask = 0;
+    toTransfer.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    toTransfer.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    toTransfer.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    toTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toTransfer.image = vkCtx.pbrImage;
+    toTransfer.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+    VkDependencyInfo dep1{};
+    dep1.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dep1.imageMemoryBarrierCount = 1;
+    dep1.pImageMemoryBarriers = &toTransfer;
+    vkCmdPipelineBarrier2(cmd, &dep1);
+
+    VkBufferImageCopy copyRegion{};
+    copyRegion.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copyRegion.imageExtent = {kPbrSize, kPbrSize, 1};
+    vkCmdCopyBufferToImage(cmd, uploadBuf, vkCtx.pbrImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
+
+    VkImageMemoryBarrier2 toShader{};
+    toShader.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    toShader.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    toShader.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    toShader.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    toShader.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    toShader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toShader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toShader.image = vkCtx.pbrImage;
+    toShader.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+    VkDependencyInfo dep2{};
+    dep2.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dep2.imageMemoryBarrierCount = 1;
+    dep2.pImageMemoryBarriers = &toShader;
+    vkCmdPipelineBarrier2(cmd, &dep2);
+
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(vkCtx.graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(vkCtx.graphicsQueue);
+
+    vkDestroyBuffer(vkCtx.device, uploadBuf, nullptr);
+    vkFreeMemory(vkCtx.device, uploadMem, nullptr);
+    return true;
+}
+
 static void Destroy_Framebuffer_Texture()
 {
     if (!vkCtx.device) return;
@@ -718,7 +969,12 @@ static bool Ensure_Framebuffer_Texture(uint32_t w, uint32_t h)
         tacUboDesc.offset = 0;
         tacUboDesc.range = sizeof(Tactical3DUBOData);
 
-        VkWriteDescriptorSet writes[5]{};
+        VkDescriptorImageInfo pbrImgDesc{};
+        pbrImgDesc.sampler = vkCtx.pbrSampler ? vkCtx.pbrSampler : (vkCtx.menuSampler ? vkCtx.menuSampler : vkCtx.fbSampler);
+        pbrImgDesc.imageView = vkCtx.pbrImageView ? vkCtx.pbrImageView : (vkCtx.menuImageView ? vkCtx.menuImageView : vkCtx.fbImageView);
+        pbrImgDesc.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkWriteDescriptorSet writes[6]{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = fr.descriptorSet;
         writes[0].dstBinding = 0;
@@ -754,7 +1010,14 @@ static bool Ensure_Framebuffer_Texture(uint32_t w, uint32_t h)
         writes[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         writes[4].pBufferInfo = &tacUboDesc;
 
-        vkUpdateDescriptorSets(vkCtx.device, 5, writes, 0, nullptr);
+        writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[5].dstSet = fr.descriptorSet;
+        writes[5].dstBinding = 5;
+        writes[5].descriptorCount = 1;
+        writes[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[5].pImageInfo = &pbrImgDesc;
+
+        vkUpdateDescriptorSets(vkCtx.device, 6, writes, 0, nullptr);
     }
 
     return true;
@@ -1176,8 +1439,21 @@ static bool Initialize_Vulkan_Backend(int gameW, int gameH)
         return false;
     }
 
-    // Descriptor Set Layout (binding 0: usampler2D, binding 1: PaletteUBO, binding 2: sampler2D, binding 3: UltraMenuUBO, binding 4: Tactical3DUBO)
-    VkDescriptorSetLayoutBinding bindings[5]{};
+    // Create repeating linear sampler for 512x512 Tileable PBR Material / Voronoi / Foam Atlas
+    VkSamplerCreateInfo pbrSampInfo{};
+    pbrSampInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    pbrSampInfo.magFilter = VK_FILTER_LINEAR;
+    pbrSampInfo.minFilter = VK_FILTER_LINEAR;
+    pbrSampInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    pbrSampInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    pbrSampInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    pbrSampInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    if (vkCreateSampler(vkCtx.device, &pbrSampInfo, nullptr, &vkCtx.pbrSampler) != VK_SUCCESS) {
+        return false;
+    }
+
+    // Descriptor Set Layout (0: usampler2D, 1: PaletteUBO, 2: MenuTex, 3: UltraMenuUBO, 4: Tactical3DUBO, 5: PBRAtlasTex)
+    VkDescriptorSetLayoutBinding bindings[6]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[0].descriptorCount = 1;
@@ -1203,9 +1479,14 @@ static bool Initialize_Vulkan_Backend(int gameW, int gameH)
     bindings[4].descriptorCount = 1;
     bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    bindings[5].binding = 5;
+    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[5].descriptorCount = 1;
+    bindings[5].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
     VkDescriptorSetLayoutCreateInfo dslInfo{};
     dslInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    dslInfo.bindingCount = 5;
+    dslInfo.bindingCount = 6;
     dslInfo.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(vkCtx.device, &dslInfo, nullptr, &vkCtx.descriptorSetLayout) != VK_SUCCESS) {
         return false;
@@ -1213,7 +1494,7 @@ static bool Initialize_Vulkan_Backend(int gameW, int gameH)
 
     VkDescriptorPoolSize poolSizes[2]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = kMaxFramesInFlight * 2;
+    poolSizes[0].descriptorCount = kMaxFramesInFlight * 3;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[1].descriptorCount = kMaxFramesInFlight * 3;
 
@@ -1348,6 +1629,7 @@ static bool Initialize_Vulkan_Backend(int gameW, int gameH)
 
     vkCtx.initialized = true;
     Ensure_Menu_Texture();
+    Ensure_PBR_Material_Texture();
     Ensure_Framebuffer_Texture(static_cast<uint32_t>(gameW), static_cast<uint32_t>(gameH));
     return true;
 }
@@ -1357,6 +1639,7 @@ static void Shutdown_Vulkan_Backend()
     if (vkCtx.device) {
         vkDeviceWaitIdle(vkCtx.device);
 
+        Destroy_PBR_Material_Texture();
         Destroy_Menu_Texture();
         Destroy_Framebuffer_Texture();
         Destroy_Swapchain();
@@ -1395,6 +1678,7 @@ static void Shutdown_Vulkan_Backend()
         if (vkCtx.pipelineLayout) vkDestroyPipelineLayout(vkCtx.device, vkCtx.pipelineLayout, nullptr);
         if (vkCtx.descriptorPool) vkDestroyDescriptorPool(vkCtx.device, vkCtx.descriptorPool, nullptr);
         if (vkCtx.descriptorSetLayout) vkDestroyDescriptorSetLayout(vkCtx.device, vkCtx.descriptorSetLayout, nullptr);
+        if (vkCtx.pbrSampler) vkDestroySampler(vkCtx.device, vkCtx.pbrSampler, nullptr);
         if (vkCtx.menuSampler) vkDestroySampler(vkCtx.device, vkCtx.menuSampler, nullptr);
         if (vkCtx.fbSampler) vkDestroySampler(vkCtx.device, vkCtx.fbSampler, nullptr);
 
