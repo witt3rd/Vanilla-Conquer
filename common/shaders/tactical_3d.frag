@@ -403,91 +403,120 @@ float evaluateSingleEntitySDF(
 
         if (subType == 0) {
             // UNIT_HTANK: GDI MAMMOTH TANK (Quad-track pods, massive hull, twin 120mm cannons, side Tusk pods)
-            vec3 tpPod = vec3(abs(hp.x) - 0.25, abs(hp.y) - 0.19, hp.z - 0.075);
-            dTread = sdRoundBox(tpPod, vec3(0.075, 0.155, 0.065), 0.015);
+            vec3 tpPod = vec3(abs(hp.x) - 0.30, abs(hp.y) - 0.22, hp.z - 0.085);
+            dTread = sdRoundBox(tpPod, vec3(0.09, 0.185, 0.075), 0.018);
 
             // Sloped heavy glacis hull
-            vec3 hullP = hp - vec3(0.0, 0.0, 0.13);
-            dHull = sdRoundBox(hullP, vec3(0.22, 0.31, 0.075), 0.02);
+            vec3 hullP = hp - vec3(0.0, 0.0, 0.155);
+            dHull = sdRoundBox(hullP, vec3(0.26, 0.36, 0.085), 0.024);
 
             // Wide Mammoth Turret + Twin 120mm Barrels + Side Missile Pods
-            vec3 turP = tp - vec3(0.0, 0.04, 0.24);
-            dTurret = sdRoundBox(turP, vec3(0.16, 0.18, 0.065), 0.02);
+            vec3 turP = tp - vec3(0.0, 0.04, 0.275);
+            dTurret = sdRoundBox(turP, vec3(0.195, 0.215, 0.075), 0.024);
             // Side Tusk rocket pods
-            dTurret = min(dTurret, sdRoundBox(vec3(abs(tp.x) - 0.185, tp.y - 0.04, tp.z - 0.25), vec3(0.035, 0.11, 0.045), 0.01));
+            dTurret = min(dTurret, sdRoundBox(vec3(abs(tp.x) - 0.225, tp.y - 0.03, tp.z - 0.285), vec3(0.045, 0.135, 0.055), 0.012));
             // Dual 120mm rifled barrels pointing forward (-Y)
-            vec3 barP = vec3(abs(tp.x) - 0.055, tp.y + 0.24, tp.z - 0.245);
-            dTurret = min(dTurret, sdCylinderY(barP, 0.024, 0.19));
+            vec3 barP = vec3(abs(tp.x) - 0.068, tp.y + 0.27, tp.z - 0.28);
+            dTurret = min(dTurret, sdCylinderY(barP, 0.036, 0.23));
         } else if (subType == 1) {
             // UNIT_MTANK: GDI MEDIUM TANK (M1A2-style wide sloped hull, reactive skirts, 120mm cannon)
-            dTread = sdRoundBox(vec3(abs(hp.x) - 0.21, hp.y, hp.z - 0.065), vec3(0.06, 0.29, 0.058), 0.014);
-            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.115), vec3(0.19, 0.27, 0.06), 0.018);
-            dTurret = sdRoundBox(tp - vec3(0.0, 0.02, 0.205), vec3(0.135, 0.155, 0.052), 0.018);
-            dTurret = min(dTurret, sdCylinderY(tp - vec3(0.0, -0.22, 0.205), 0.022, 0.18));
+            dTread = sdRoundBox(vec3(abs(hp.x) - 0.25, hp.y, hp.z - 0.075), vec3(0.078, 0.34, 0.068), 0.016);
+            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.135), vec3(0.225, 0.32, 0.072), 0.022);
+            dTurret = sdRoundBox(tp - vec3(0.0, 0.02, 0.235), vec3(0.165, 0.185, 0.064), 0.022);
+            dTurret = min(dTurret, sdCylinderY(tp - vec3(0.0, -0.25, 0.235), 0.034, 0.22));
         } else if (subType == 2) {
             // UNIT_LTANK: NOD LIGHT TANK (Compact wedge hull, rounded recon turret, 75mm gun)
-            dTread = sdRoundBox(vec3(abs(hp.x) - 0.17, hp.y, hp.z - 0.055), vec3(0.05, 0.23, 0.05), 0.012);
-            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.10), vec3(0.15, 0.22, 0.052), 0.016);
-            dTurret = sdRoundBox(tp - vec3(0.0, 0.01, 0.175), vec3(0.11, 0.12, 0.045), 0.022);
-            dTurret = min(dTurret, sdCylinderY(tp - vec3(0.0, -0.18, 0.175), 0.018, 0.14));
+            dTread = sdRoundBox(vec3(abs(hp.x) - 0.21, hp.y, hp.z - 0.068), vec3(0.068, 0.28, 0.060), 0.014);
+            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.12), vec3(0.185, 0.27, 0.064), 0.018);
+            dTurret = sdRoundBox(tp - vec3(0.0, 0.01, 0.205), vec3(0.135, 0.15, 0.056), 0.024);
+            dTurret = min(dTurret, sdCylinderY(tp - vec3(0.0, -0.21, 0.205), 0.030, 0.18));
         } else if (subType == 3) {
             // UNIT_STANK: NOD STEALTH TANK (Angular F-117 stealth chassis + twin rocket bay)
-            dTread = sdRoundBox(vec3(abs(hp.x) - 0.17, hp.y, hp.z - 0.05), vec3(0.045, 0.24, 0.045), 0.01);
-            vec3 sp = hp - vec3(0.0, 0.0, 0.11);
-            sp.x *= 1.0 + 0.6 * max(0.0, -sp.y);
-            dHull = sdRoundBox(sp, vec3(0.16, 0.26, 0.06), 0.008);
-            dTurret = sdBox(hp - vec3(0.0, 0.04, 0.185), vec3(0.11, 0.13, 0.04));
+            dTread = sdRoundBox(vec3(abs(hp.x) - 0.21, hp.y, hp.z - 0.062), vec3(0.060, 0.29, 0.055), 0.012);
+            vec3 sp = hp - vec3(0.0, 0.0, 0.13);
+            sp.x *= 1.0 + 0.55 * max(0.0, -sp.y);
+            dHull = sdRoundBox(sp, vec3(0.195, 0.31, 0.072), 0.010);
+            dTurret = sdBox(hp - vec3(0.0, 0.04, 0.215), vec3(0.135, 0.16, 0.052));
         } else if (subType == 4) {
             // UNIT_FTANK: NOD FLAME TANK (Twin rear pressurized fuel tanks + dual front flame nozzles)
-            dTread = sdRoundBox(vec3(abs(hp.x) - 0.18, hp.y, hp.z - 0.06), vec3(0.055, 0.24, 0.055), 0.012);
-            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.105), vec3(0.16, 0.23, 0.055), 0.015);
+            dTread = sdRoundBox(vec3(abs(hp.x) - 0.22, hp.y, hp.z - 0.070), vec3(0.070, 0.29, 0.064), 0.015);
+            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.125), vec3(0.195, 0.28, 0.068), 0.018);
             // Twin rear cylindrical fuel tanks
-            vec3 tankP = vec3(abs(hp.x) - 0.085, hp.y - 0.09, hp.z - 0.185);
-            dTurret = sdCylinderY(tankP, 0.058, 0.11);
+            vec3 tankP = vec3(abs(hp.x) - 0.105, hp.y - 0.10, hp.z - 0.215);
+            dTurret = sdCylinderY(tankP, 0.072, 0.135);
             // Dual forward flame projectors
-            vec3 nozP = vec3(abs(hp.x) - 0.07, hp.y + 0.21, hp.z - 0.14);
-            dTurret = min(dTurret, sdCylinderY(nozP, 0.022, 0.10));
+            vec3 nozP = vec3(abs(hp.x) - 0.085, hp.y + 0.24, hp.z - 0.165);
+            dTurret = min(dTurret, sdCylinderY(nozP, 0.032, 0.125));
         } else if (subType == 10) {
             // UNIT_HARVESTER: HEAVY TIBERIUM HARVESTER (Armored hopper + glowing green crystals + front claw scoops)
-            dTread = sdRoundBox(vec3(abs(hp.x) - 0.24, hp.y, hp.z - 0.075), vec3(0.07, 0.31, 0.068), 0.015);
+            dTread = sdRoundBox(vec3(abs(hp.x) - 0.28, hp.y, hp.z - 0.085), vec3(0.085, 0.36, 0.078), 0.018);
             // Rear containment hopper & sloped forward cab
-            dHull  = sdRoundBox(hp - vec3(0.0, 0.05, 0.155), vec3(0.22, 0.25, 0.095), 0.02);
-            dHull  = min(dHull, sdRoundBox(hp - vec3(0.0, -0.16, 0.14), vec3(0.17, 0.12, 0.075), 0.02));
+            dHull  = sdRoundBox(hp - vec3(0.0, 0.06, 0.175), vec3(0.26, 0.29, 0.11), 0.024);
+            dHull  = min(dHull, sdRoundBox(hp - vec3(0.0, -0.19, 0.155), vec3(0.20, 0.14, 0.088), 0.022));
             // Dual animated front harvesting claws
-            float clawSwing = isSpecial ? sin(time * 9.0) * 0.04 : 0.0;
-            vec3 clawP = vec3(abs(hp.x) - (0.12 + clawSwing), hp.y + 0.31, hp.z - 0.07);
-            dTurret = sdRoundBox(clawP, vec3(0.045, 0.08, 0.04), 0.01);
+            float clawSwing = isSpecial ? sin(time * 9.0) * 0.045 : 0.0;
+            vec3 clawP = vec3(abs(hp.x) - (0.14 + clawSwing), hp.y + 0.36, hp.z - 0.085);
+            dTurret = sdRoundBox(clawP, vec3(0.058, 0.095, 0.052), 0.012);
             // Glowing Tiberium crystal core inside rear hopper grates
-            dGlow = sdRoundBox(hp - vec3(0.0, 0.08, 0.22), vec3(0.14, 0.15, 0.045), 0.01);
+            dGlow = sdRoundBox(hp - vec3(0.0, 0.09, 0.255), vec3(0.165, 0.175, 0.055), 0.012);
+        } else if (subType == 13) {
+            // UNIT_HOVER: AMPHIBIOUS HOVERCRAFT LCAC (Wide rubber air-cushion skirt + vehicle deck + twin thrust fans)
+            dTread = sdRoundBox(hp - vec3(0.0, 0.0, 0.055), vec3(0.42, 0.48, 0.052), 0.028);
+            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.115), vec3(0.35, 0.41, 0.035), 0.015);
+            // Sidewalls & rear twin shrouded fan ducts
+            dHull  = min(dHull, sdRoundBox(vec3(abs(hp.x) - 0.33, hp.y, hp.z - 0.17), vec3(0.045, 0.36, 0.055), 0.01));
+            dTurret = sdCylinderY(vec3(abs(hp.x) - 0.18, hp.y - 0.34, hp.z - 0.22), 0.095, 0.055);
+        } else if (subType == 14) {
+            // UNIT_MHQ: MOBILE HEADQUARTERS (Armored command chassis + rotating 3D radar dish)
+            dTread = sdRoundBox(vec3(abs(hp.x) - 0.23, hp.y, hp.z - 0.072), vec3(0.072, 0.31, 0.065), 0.015);
+            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.145), vec3(0.21, 0.29, 0.085), 0.02);
+            vec3 dishP = hp - vec3(0.0, 0.04, 0.275);
+            dishP.xy = rot2D(dishP.xy, time * 2.2);
+            dTurret = sdRoundBox(dishP, vec3(0.18, 0.055, 0.095), 0.02);
+        } else if (subType == 15) {
+            // UNIT_GUNBOAT: GDI NAVAL MISSILE GUNBOAT (Sleek warship hull, bridge superstructure, bow turret)
+            vec3 bowP = hp - vec3(0.0, 0.0, 0.095);
+            bowP.x *= 1.0 + 0.75 * max(0.0, -bowP.y - 0.10);
+            dHull  = sdRoundBox(bowP, vec3(0.24, 0.46, 0.075), 0.022);
+            // Bridge cabin superstructure
+            dHull  = min(dHull, sdRoundBox(hp - vec3(0.0, 0.06, 0.195), vec3(0.15, 0.18, 0.065), 0.018));
+            // Rotating bow turret + twin naval cannon barrel
+            dTurret = sdRoundBox(tp - vec3(0.0, -0.20, 0.185), vec3(0.11, 0.12, 0.052), 0.016);
+            dTurret = min(dTurret, sdCylinderY(tp - vec3(0.0, -0.34, 0.185), 0.030, 0.14));
         } else if (subType == 16) {
-            // UNIT_MCV: MOBILE CONSTRUCTION VEHICLE (Massive industrial rig + crane boom)
-            dTread = sdRoundBox(vec3(abs(hp.x) - 0.25, hp.y, hp.z - 0.075), vec3(0.07, 0.34, 0.07), 0.015);
-            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.165), vec3(0.23, 0.32, 0.105), 0.02);
-            dTurret = sdRoundBox(hp - vec3(0.06, 0.02, 0.28), vec3(0.06, 0.24, 0.045), 0.01);
+            // UNIT_MCV: MOBILE CONSTRUCTION VEHICLE (Massive industrial rig + crane boom + beacon)
+            dTread = sdRoundBox(vec3(abs(hp.x) - 0.29, hp.y, hp.z - 0.085), vec3(0.085, 0.38, 0.078), 0.018);
+            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.185), vec3(0.27, 0.36, 0.115), 0.024);
+            dTurret = sdRoundBox(hp - vec3(0.07, 0.02, 0.31), vec3(0.075, 0.27, 0.055), 0.014);
+            dGlow  = length(hp - vec3(-0.12, -0.22, 0.31)) - 0.055;
         } else if (subType == 7 || subType == 12) {
-            // UNIT_MLRS / UNIT_MSAM: Tracked Chassis + Rotating Box Rocket Launcher Pod
-            dTread = sdRoundBox(vec3(abs(hp.x) - 0.19, hp.y, hp.z - 0.06), vec3(0.055, 0.26, 0.055), 0.012);
-            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.105), vec3(0.17, 0.25, 0.05), 0.015);
-            dTurret = sdRoundBox(tp - vec3(0.0, 0.03, 0.21), vec3(0.14, 0.16, 0.075), 0.012);
+            // UNIT_MLRS / UNIT_MSAM: Tracked Chassis + Rotating Elevated Box Rocket Launcher Pod
+            dTread = sdRoundBox(vec3(abs(hp.x) - 0.23, hp.y, hp.z - 0.070), vec3(0.070, 0.31, 0.062), 0.015);
+            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.12), vec3(0.205, 0.29, 0.060), 0.018);
+            vec3 podP = tp - vec3(0.0, 0.02, 0.235);
+            podP.yz = rot2D(podP.yz, 0.26);
+            dTurret = sdRoundBox(podP, vec3(0.17, 0.195, 0.088), 0.016);
         } else if (subType == 11) {
             // UNIT_ARTY: Self-Propelled Artillery Howitzer (Long elevated 155mm barrel)
-            dTread = sdRoundBox(vec3(abs(hp.x) - 0.19, hp.y, hp.z - 0.06), vec3(0.055, 0.25, 0.055), 0.012);
-            dHull  = sdRoundBox(hp - vec3(0.0, 0.02, 0.11), vec3(0.17, 0.23, 0.055), 0.015);
-            dTurret = sdRoundBox(hp - vec3(0.0, 0.06, 0.18), vec3(0.12, 0.12, 0.055), 0.015);
-            vec3 barP = hp - vec3(0.0, -0.18, 0.23);
-            barP.yz = rot2D(barP.yz, 0.32);
-            dTurret = min(dTurret, sdCylinderY(barP, 0.024, 0.22));
+            dTread = sdRoundBox(vec3(abs(hp.x) - 0.23, hp.y, hp.z - 0.070), vec3(0.070, 0.30, 0.062), 0.015);
+            dHull  = sdRoundBox(hp - vec3(0.0, 0.02, 0.125), vec3(0.205, 0.28, 0.065), 0.018);
+            dTurret = sdRoundBox(hp - vec3(0.0, 0.07, 0.205), vec3(0.15, 0.15, 0.065), 0.018);
+            vec3 barP = hp - vec3(0.0, -0.20, 0.265);
+            barP.yz = rot2D(barP.yz, 0.34);
+            dTurret = min(dTurret, sdCylinderY(barP, 0.036, 0.25));
         } else if (subType == 8 || subType == 9 || subType == 17) {
             // UNIT_JEEP (Humvee), UNIT_BUGGY, UNIT_BIKE: Fast Wheeled Recon Vehicles
-            float wSpan = (subType == 17) ? 0.04 : 0.15;
-            dTread = sdRoundBox(vec3(abs(hp.x) - wSpan, abs(hp.y) - 0.13, hp.z - 0.05), vec3(0.035, 0.055, 0.05), 0.015);
-            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.095), vec3(wSpan + 0.01, 0.20, 0.048), 0.015);
-            dTurret = sdCylinderY(tp - vec3(0.0, -0.06, 0.165), 0.016, 0.11);
+            float wSpan = (subType == 17) ? 0.055 : 0.195;
+            dTread = sdRoundBox(vec3(abs(hp.x) - wSpan, abs(hp.y) - 0.16, hp.z - 0.062), vec3(0.052, 0.075, 0.060), 0.018);
+            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.115), vec3(wSpan + 0.025, 0.25, 0.062), 0.018);
+            dTurret = sdRoundBox(tp - vec3(0.0, 0.01, 0.185), vec3(0.075, 0.085, 0.042), 0.012);
+            dTurret = min(dTurret, sdCylinderY(tp - vec3(0.0, -0.12, 0.195), 0.028, 0.14));
         } else {
-            // UNIT_APC / UNIT_GUNBOAT / UNIT_HOVER / Default Armored Vehicle
-            dTread = sdRoundBox(vec3(abs(hp.x) - 0.19, hp.y, hp.z - 0.06), vec3(0.055, 0.25, 0.055), 0.012);
-            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.13), vec3(0.18, 0.24, 0.075), 0.018);
-            dTurret = sdRoundBox(tp - vec3(0.0, -0.04, 0.22), vec3(0.08, 0.09, 0.035), 0.01);
+            // UNIT_APC & Default Armored Tracked Carrier
+            dTread = sdRoundBox(vec3(abs(hp.x) - 0.23, hp.y, hp.z - 0.072), vec3(0.072, 0.30, 0.065), 0.015);
+            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.15), vec3(0.215, 0.29, 0.088), 0.022);
+            dTurret = sdRoundBox(tp - vec3(0.0, -0.05, 0.245), vec3(0.105, 0.115, 0.045), 0.014);
+            dTurret = min(dTurret, sdCylinderY(tp - vec3(0.0, -0.17, 0.245), 0.026, 0.12));
         }
 
         float dMin = dHull;
@@ -629,12 +658,44 @@ float evaluateSingleEntitySDF(
     if (cat == 2) {
         vec2 ixy = rot2D(rel.xy, -d1.x);
         vec3 ip = vec3(ixy, rel.z);
-        float dBody = sdCapsule(ip, vec3(0.0, 0.0, 0.04), vec3(0.0, 0.0, 0.15), 0.055);
-        float dHelm = length(ip - vec3(0.0, 0.0, 0.19)) - 0.048;
-        float dGun  = sdCylinderY(ip - vec3(0.035, -0.07, 0.13), 0.016, 0.075);
+        if (isSpecial) {
+            // Prone infantry soldier hugged low to the ground
+            float dProne = sdCapsule(ip, vec3(0.0, -0.09, 0.045), vec3(0.0, 0.11, 0.045), 0.062);
+            float dHelm  = length(ip - vec3(0.0, -0.13, 0.068)) - 0.058;
+            float dGun   = sdCylinderY(ip - vec3(0.045, -0.20, 0.055), 0.024, 0.095);
+            float dMin = min(dProne, dHelm);
+            partMat = 29;
+            partLocal = ip;
+            if (dGun < dMin) {
+                dMin = dGun;
+                partMat = 22;
+            }
+            return dMin;
+        }
+        // Standing / striding 3D armored soldier (boots, armored torso, shoulder pads, visored helmet, weapon)
+        float dLegs = sdCapsule(vec3(abs(ip.x) - 0.042, ip.y, ip.z), vec3(0.0, 0.0, 0.02), vec3(0.0, 0.0, 0.11), 0.036);
+        float dBody = sdRoundBox(ip - vec3(0.0, 0.0, 0.155), vec3(0.082, 0.058, 0.068), 0.022);
+        float dPack = sdRoundBox(ip - vec3(0.0, 0.055, 0.165), vec3(0.058, 0.035, 0.055), 0.012);
+        float dHelm = length(ip - vec3(0.0, -0.01, 0.255)) - 0.066;
+
+        // Weapon & specialist gear by InfantryType (0=Minigun, 1=Grenade, 2=Bazooka, 3=Flamer, 4=Chem, 5=Engineer, 6=Rambo)
+        float dGun = sdCylinderY(ip - vec3(0.062, -0.095, 0.165), 0.028, 0.115);
+        if (subType == 2) {
+            // INFANTRY_E3 Rocket Soldier: shoulder-mounted AT bazooka tube extending front & back
+            dGun = sdCylinderY(ip - vec3(0.072, -0.03, 0.225), 0.036, 0.175);
+        }
+
         float dMin = min(dBody, dHelm);
         partMat = 29;
         partLocal = ip;
+        if (dLegs < dMin) {
+            dMin = dLegs;
+            partMat = 20;
+        }
+        if (dPack < dMin) {
+            dMin = dPack;
+            partMat = (subType == 3 || subType == 4) ? 23 : 22;
+        }
         if (dGun < dMin) {
             dMin = dGun;
             partMat = 22;
@@ -649,13 +710,21 @@ float evaluateSingleEntitySDF(
         vec2 axy = rot2D(rel.xy, -d1.x);
         vec3 ap = vec3(axy, rel.z);
         // Fuselage + tail boom
-        float dFuse = sdRoundBox(ap, vec3(0.14, 0.32, 0.08), 0.035);
+        float dFuse = sdRoundBox(ap, vec3(0.16, 0.38, 0.095), 0.038);
         // Wings / VTOL Turbofan Nacelles
-        float dWing = sdRoundBox(vec3(abs(ap.x) - 0.22, ap.y + 0.04, ap.z), vec3(0.12, 0.11, 0.045), 0.015);
+        float wSpan = (subType == 1 || subType == 3) ? 0.36 : 0.25;
+        float dWing = sdRoundBox(vec3(abs(ap.x) - wSpan, ap.y + 0.04, ap.z), vec3(0.16, 0.12, 0.052), 0.018);
         // Spinning Rotor Disk (for helicopters/transports)
         float dRotor = 1e5;
-        if (subType != 1 && subType != 3) {
-            dRotor = sdCylinderZ(ap - vec3(0.0, 0.0, 0.10), 0.42, 0.008);
+        if (subType == 0) {
+            // Chinook tandem twin rotors
+            dRotor = min(
+                sdCylinderZ(ap - vec3(0.0, -0.22, 0.12), 0.36, 0.014),
+                sdCylinderZ(ap - vec3(0.0,  0.22, 0.13), 0.36, 0.014)
+            );
+        } else if (subType == 2) {
+            // Apache main rotor disk
+            dRotor = sdCylinderZ(ap - vec3(0.0, 0.0, 0.12), 0.44, 0.014);
         }
         float dMin = min(dFuse, dWing);
         partMat = 21;
@@ -742,13 +811,13 @@ void main() {
     vec4 tipRect = uTac.overlay_rects[2];
     bool inTooltip = (tipRect.z > tipRect.x && vUV.x >= tipRect.x && vUV.x <= tipRect.z && vUV.y >= tipRect.y && vUV.y <= tipRect.w);
 
-    // Sample 8-bit software framebuffer for UI / HUD / Dialogs / Messages
+    // Sample 8-bit software framebuffer for UI / HUD / Dialogs / Messages / Cursor
     uint palIdx = texture(uFrameIndex, vUV).r & 0xFFu;
     vec3 fbColor = uPalette.colors[palIdx].rgb;
 
-    // Top rows of tactical view: check if multiplayer/system message text is drawn
-    float msgV1 = uTac.overlay_rects[3].x;
-    bool inMsgText = (inTacViewport && vUV.y < msgV1 && palIdx != 0u && palIdx != 12u);
+    // Top rows of tactical view: check if multiplayer/system message text is drawn (packed in fract(view_params3.z))
+    float msgV1 = fract(uTac.view_params3.z);
+    bool inMsgText = (inTacViewport && msgV1 > 0.001 && vUV.y < msgV1 && palIdx != 0u && palIdx != 12u);
 
     if (!inTacViewport || inDialog || inTooltip || inMsgText) {
         vec3 uiCol = fbColor;
@@ -963,10 +1032,11 @@ void main() {
     }
 
     // ------------------------------------------------------------------------
-    // 6. Ray-March 3D Cell Structures (Tiberium Crystals, Walls, Crates)
+    // 6. Top-Down Oblique Camera Ray-March of 3D Cell Structures (Tiberium, Walls, Crates)
     //    & 3D Articulated Entities (Vehicles, Buildings, Infantry, Aircraft, Trees)
+    //    Rays march FROM THE CAMERA (u = uMax, above the scene) DOWNWARD (-V) toward u = 0 (ground)
     // ------------------------------------------------------------------------
-    vec3 rayDir = vec3(0.0, -0.42, 0.907); // From ground point upward toward camera
+    vec3 camDir = vec3(0.0, 0.42, 0.907); // Unit vector from ground point toward camera (+Y South, +Z Up)
     int hitMat = 0;
     vec3 hitPos = terrainPos;
     vec3 hitNormal = terrainN;
@@ -975,41 +1045,40 @@ void main() {
     int hitSubType = 0;
     int hitFlags = 0;
     float hitHealth = 1.0;
-    float bestHeight = hGround;
+    float bestCamU = 0.0;
 
     // A. Check 3D Tiberium Crystal Clusters, Connected Walls & Supply Crates in current/southern cell
+    ivec2 groundCellIdx = ivec2(floor(groundCellXY));
     for (int cy = 0; cy <= 1; ++cy) {
-        ivec2 testCell = cellIdx + ivec2(0, cy);
+        ivec2 testCell = groundCellIdx + ivec2(0, cy);
         uint rawC = fetchCellRaw(testCell);
         uint ovlC = (rawC >> 4u) & 15u;
         uint landC = rawC & 15u;
         if (ovlC == 0u && landC != 4u && landC != 5u) continue;
 
-        float t = 0.02;
-        for (int s = 0; s < 14; ++s) {
-            vec3 p = vec3(groundCellXY, 0.0) + rayDir * t;
+        float u = 0.42;
+        for (int s = 0; s < 18; ++s) {
+            if (u <= bestCamU) break;
+            vec3 p = vec3(groundCellXY + camDir.xy * u, camDir.z * u);
             int mId;
             vec3 lCoord;
             float d = mapCellStructures(p, testCell, rawC, mId, lCoord);
-            if (d < 0.008) {
-                if (p.z > bestHeight) {
-                    bestHeight = p.z;
-                    hitMat = mId;
-                    hitPos = p;
-                    hitLocal = lCoord;
-                    float eps = 0.008;
-                    int dm;
-                    vec3 dl;
-                    hitNormal = normalize(vec3(
-                        mapCellStructures(p + vec3(eps, 0.0, 0.0), testCell, rawC, dm, dl) - d,
-                        mapCellStructures(p + vec3(0.0, eps, 0.0), testCell, rawC, dm, dl) - d,
-                        mapCellStructures(p + vec3(0.0, 0.0, eps), testCell, rawC, dm, dl) - d
-                    ));
-                }
+            if (d < 0.006) {
+                bestCamU = u;
+                hitMat = mId;
+                hitPos = terrainPos + camDir * u;
+                hitLocal = lCoord;
+                float eps = 0.006;
+                int dm;
+                vec3 dl;
+                hitNormal = normalize(vec3(
+                    mapCellStructures(p + vec3(eps, 0.0, 0.0), testCell, rawC, dm, dl) - d,
+                    mapCellStructures(p + vec3(0.0, eps, 0.0), testCell, rawC, dm, dl) - d,
+                    mapCellStructures(p + vec3(0.0, 0.0, eps), testCell, rawC, dm, dl) - d
+                ));
                 break;
             }
-            t += max(d * 0.85, 0.018);
-            if (t > 0.65) break;
+            u -= max(d * 0.85, 0.006);
         }
     }
 
@@ -1032,28 +1101,29 @@ void main() {
         float health = clamp(fract(d1.z), 0.01, 0.999);
 
         // Determine culling radius in cells based on entity category
-        float cullRad = 0.72;
+        float cullRad = 0.85;
         if (cat == 1) {
             int fw = max(1, int(floor(d1.w)) & 7);
             int fh = max(1, (int(floor(d1.w)) >> 3) & 7);
-            cullRad = max(float(fw), float(fh)) * 0.68 + 0.45;
+            cullRad = max(float(fw), float(fh)) * 0.72 + 0.55;
         } else if (cat == 3) {
-            cullRad = 1.65;
+            cullRad = 1.85;
         } else if (cat == 4 || cat == 6) {
-            cullRad = 0.95;
+            cullRad = 1.05;
         }
 
-        // Fast 2D bounding-box rejection
-        vec2 diffXY = groundCellXY - d0.xy;
+        // Fast 2D bounding-box rejection (shifted slightly North for tall 3D projection)
+        vec2 projCenter = d0.xy - vec2(0.0, d0.z * 0.46 + ((cat == 1) ? 0.16 : 0.08));
+        vec2 diffXY = groundCellXY - projCenter;
         if (max(abs(diffXY.x), abs(diffXY.y)) > cullRad) continue;
 
         // 1. Soft Directional Ground Shadow from this 3D Entity
-        float shadowH = (cat == 3) ? max(d0.z, 0.65) : ((cat == 1) ? 0.32 : 0.16);
+        float shadowH = (cat == 3) ? max(d0.z, 0.65) : ((cat == 1) ? 0.34 : 0.18);
         vec2 shadowCenter = d0.xy - L.xy * (shadowH / max(L.z, 0.25));
-        vec2 sDiff = displacedCellXY - shadowCenter;
+        vec2 sDiff = groundCellXY - shadowCenter;
         vec2 sSpan = (cat == 1)
             ? vec2(max(1, int(floor(d1.w)) & 7), max(1, (int(floor(d1.w)) >> 3) & 7)) * 0.46
-            : vec2(0.28, 0.32);
+            : vec2(0.32, 0.36);
         float sDist = length(max(abs(sDiff) - sSpan * 0.65, 0.0)) / max(sSpan.x * 0.55, 0.15);
         entityShadow = max(entityShadow, smoothstep(1.0, 0.1, sDist) * ((cat == 3) ? 0.55 : 0.72));
 
@@ -1116,39 +1186,38 @@ void main() {
             continue;
         }
 
-        // 3. Ray-March 3D Solid Entity (Vehicle, Structure, Infantry, Aircraft, Tree/Rock)
-        float tStart = max(0.0, d0.z * 0.85);
-        float tMax   = (cat == 3) ? (d0.z * 1.25 + 0.65) : ((cat == 1) ? 1.15 : 0.65);
-        float t = tStart;
-        for (int s = 0; s < 16; ++s) {
-            vec3 p = vec3(groundCellXY, 0.0) + rayDir * t;
+        // 3. Top-Down Camera Sphere-Tracing for 3D Solid Entity (Vehicle, Structure, Infantry, Aircraft, Tree/Rock)
+        // March from uMax (closest to camera, above entity top) downward toward uMin (ground / base altitude)
+        float uMax = (cat == 3) ? (d0.z * 1.15 + 0.42) : ((cat == 1) ? 1.05 : ((cat == 4) ? 0.88 : (d0.z * 1.1 + 0.46)));
+        float uMin = max(bestCamU, (cat == 3) ? max(0.0, d0.z * 0.85 - 0.18) : 0.0);
+        float u = uMax;
+        for (int s = 0; s < 24; ++s) {
+            if (u <= uMin) break;
+            vec3 p = vec3(groundCellXY + camDir.xy * u, camDir.z * u);
             int pMat;
             vec3 pLoc;
             float d = evaluateSingleEntitySDF(p, d0, d1, time, pMat, pLoc);
-            if (d < 0.009) {
-                if (p.z > bestHeight) {
-                    bestHeight = p.z;
-                    hitMat = pMat;
-                    hitPos = p;
-                    hitLocal = pLoc;
-                    hitHouse = houseId;
-                    hitSubType = subType;
-                    hitFlags = flags;
-                    hitHealth = health;
+            if (d < 0.006) {
+                bestCamU = u;
+                hitMat = pMat;
+                hitPos = terrainPos + camDir * u;
+                hitLocal = pLoc;
+                hitHouse = houseId;
+                hitSubType = subType;
+                hitFlags = flags;
+                hitHealth = health;
 
-                    float eps = 0.009;
-                    int dm;
-                    vec3 dl;
-                    hitNormal = normalize(vec3(
-                        evaluateSingleEntitySDF(p + vec3(eps, 0.0, 0.0), d0, d1, time, dm, dl) - d,
-                        evaluateSingleEntitySDF(p + vec3(0.0, eps, 0.0), d0, d1, time, dm, dl) - d,
-                        evaluateSingleEntitySDF(p + vec3(0.0, 0.0, eps), d0, d1, time, dm, dl) - d
-                    ));
-                }
+                float eps = 0.006;
+                int dm;
+                vec3 dl;
+                hitNormal = normalize(vec3(
+                    evaluateSingleEntitySDF(p + vec3(eps, 0.0, 0.0), d0, d1, time, dm, dl) - d,
+                    evaluateSingleEntitySDF(p + vec3(0.0, eps, 0.0), d0, d1, time, dm, dl) - d,
+                    evaluateSingleEntitySDF(p + vec3(0.0, 0.0, eps), d0, d1, time, dm, dl) - d
+                ));
                 break;
             }
-            t += max(d * 0.82, 0.018);
-            if (t > tMax) break;
+            u -= max(d * 0.88, 0.005);
         }
 
         // 4. Damage Smoke Plume & Muzzle Flash VFX for damaged / firing units
@@ -1432,6 +1501,37 @@ void main() {
     vec3 x = max(vec3(0.0), litColor);
     vec3 mapped = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
     mapped = pow(clamp(mapped, 0.0, 1.0), vec3(0.92));
+
+    // ------------------------------------------------------------------------
+    // 11. Composite Live Tactical Mouse Cursor (MOUSE.SHP + 4K Contrast Rim)
+    // ------------------------------------------------------------------------
+    vec4 curRect = uTac.overlay_rects[3];
+    if (curRect.z > curRect.x && curRect.w > curRect.y) {
+        if (vUV.x >= curRect.x && vUV.x < curRect.z && vUV.y >= curRect.y && vUV.y < curRect.w) {
+            if (palIdx != 0u) {
+                mapped = fbColor;
+            } else {
+                // High-contrast 4K dark drop-shadow rim around cursor sprite so it pops over any 3D surface
+                vec2 texel = 1.0 / vec2(textureSize(uFrameIndex, 0));
+                uint nE = texture(uFrameIndex, vUV + vec2( texel.x, 0.0)).r & 0xFFu;
+                uint nW = texture(uFrameIndex, vUV + vec2(-texel.x, 0.0)).r & 0xFFu;
+                uint nS = texture(uFrameIndex, vUV + vec2(0.0,  texel.y)).r & 0xFFu;
+                uint nN = texture(uFrameIndex, vUV + vec2(0.0, -texel.y)).r & 0xFFu;
+                if (nE != 0u || nW != 0u || nS != 0u || nN != 0u) {
+                    mapped = mix(mapped, vec3(0.02, 0.06, 0.03), 0.82);
+                }
+            }
+        }
+    } else if (curRect.x > 0.0 && curRect.y > 0.0) {
+        // Procedural 4K Phosphor Tactical Arrow fallback if software cursor bitmap is not yet set
+        vec2 cRel = (vUV - curRect.xy) * vec2(640.0, 400.0) / 16.0;
+        if (cRel.x >= -0.2 && cRel.x <= 1.1 && cRel.y >= -0.2 && cRel.y <= 1.2) {
+            bool inArrow = (cRel.x >= 0.0 && cRel.y >= 0.0 && cRel.x <= cRel.y * 0.72 && (cRel.x + cRel.y * 0.65) <= 0.85);
+            if (inArrow) {
+                mapped = vec3(0.55, 1.0, 0.65);
+            }
+        }
+    }
 
     outColor = vec4(mapped * fade, 1.0);
 }

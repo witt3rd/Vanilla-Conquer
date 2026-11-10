@@ -2535,11 +2535,10 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         ubo.overlay_rects[2][3] = -1.0f;
     }
 
-    // Multiplayer/system message rows at top of tactical view
+    // Multiplayer/system message rows at top of tactical view (packed into fract(view_params3.z))
     int numMsgs = Messages.Num_Messages();
-    ubo.overlay_rects[3][0] =
-        (numMsgs > 0) ? (static_cast<float>(TacPixelY + numMsgs * 14 + 6) / static_cast<float>(gh)) : -1.0f;
-    ubo.overlay_rects[3][1] = IsRepairMode ? 1.0f : (IsSellMode ? 2.0f : 0.0f);
+    float msgV1 =
+        (numMsgs > 0) ? (static_cast<float>(TacPixelY + numMsgs * 14 + 6) / static_cast<float>(gh)) : 0.0f;
 
     int entCount = 0;
     int lightCount = 0;
@@ -2636,7 +2635,7 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         return static_cast<float>(Coord_Y(coord)) / 256.0f - static_cast<float>(baseCellY);
     };
     auto inTacticalMargin = [&](float wx, float wy, float margin) -> bool {
-        return wx >= -margin && wx <= (30.0f + margin) && wy >= -margin && wy <= (20.0f + margin);
+        return wx >= -margin && wx <= (cellsW + margin + 1.5f) && wy >= -margin && wy <= (cellsH + margin + 1.5f);
     };
 
     constexpr float kDirToRad = 6.28318530718f / 256.0f;
@@ -2687,6 +2686,21 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         ubo.ent_data1[entCount][3] = static_cast<float>(fw | (fh << 3));
         entCount++;
 
+        // If a Harvester is docked inside a Refinery, render it in the Refinery's offloading bay
+        if (*b == STRUCT_REFINERY && b->Is_Something_Attached() && entCount < 128) {
+            int harvType = 0 | (static_cast<int>(UNIT_HARVESTER) << 3) | (houseId << 10);
+            ubo.ent_data0[entCount][0] = wx - 0.35f;
+            ubo.ent_data0[entCount][1] = wy + 0.45f;
+            ubo.ent_data0[entCount][2] = 0.0f;
+            ubo.ent_data0[entCount][3] = static_cast<float>(harvType);
+
+            ubo.ent_data1[entCount][0] = 0.785f;
+            ubo.ent_data1[entCount][1] = 0.785f;
+            ubo.ent_data1[entCount][2] = 32.99f;
+            ubo.ent_data1[entCount][3] = 3.0f;
+            entCount++;
+        }
+
         if (*b == STRUCT_OBELISK && (b->IsCharged || b->IsCharging)) {
             addPointLight(wx, wy - 0.1f, 0.85f, 3.2f, 1.0f, 0.12f, 0.16f, b->IsCharged ? 2.4f : 1.2f);
         } else if (*b == STRUCT_REFINERY || *b == STRUCT_STORAGE) {
@@ -2696,7 +2710,7 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         }
     }
 
-    // 3. Extract 3D Articulated Vehicles (Units)
+    // 3. Extract 3D Articulated Vehicles (Units + Hovercraft Deck Cargo)
     for (int i = 0; i < Units.Count() && entCount < 128; ++i) {
         UnitClass* u = Units.Ptr(i);
         if (!u || !u->IsActive || u->IsInLimbo || !u->Class) continue;
@@ -2709,7 +2723,7 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
 
         float wx = toLocalCellX(center);
         float wy = toLocalCellY(center);
-        if (!inTacticalMargin(wx, wy, 1.5f)) continue;
+        if (!inTacticalMargin(wx, wy, 1.8f)) continue;
 
         int subType = std::max(0, std::min(127, static_cast<int>(*u)));
         int houseId = Map_House_To_Color_ID(u->Owner());
@@ -2738,6 +2752,52 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         ubo.ent_data1[entCount][2] = static_cast<float>(flags) + health;
         ubo.ent_data1[entCount][3] = static_cast<float>(u->Pip_Count());
         entCount++;
+
+        // Render units & infantry riding piggyback on the deck of a Hovercraft (UNIT_HOVER)
+        if (*u == UNIT_HOVER && u->Is_Something_Attached()) {
+            const TechnoClass* cargo = u->Attached_Object();
+            int counter = 0;
+            while (cargo != nullptr && entCount < 128 && counter < 5) {
+                COORDINATE cargoCoord = Coord_Add(Coord_Add(u->Coord, 0xFF80FF80L), StoppingCoordAbs[counter++]);
+                float cwx = toLocalCellX(cargoCoord);
+                float cwy = toLocalCellY(cargoCoord);
+                int cHouse = Map_House_To_Color_ID(cargo->Owner());
+                float cHealth = std::max(0.01f, std::min(0.999f, static_cast<float>(cargo->Health_Ratio()) / 256.0f));
+                float cYaw = static_cast<float>(cargo->PrimaryFacing.Current()) * kDirToRad;
+
+                if (cargo->What_Am_I() == RTTI_UNIT) {
+                    const UnitClass* cu = static_cast<const UnitClass*>(cargo);
+                    int cSub = std::max(0, std::min(127, static_cast<int>(*cu)));
+                    int cPacked = 0 | (cSub << 3) | (cHouse << 10);
+                    float cTurYaw = static_cast<float>(cu->Class->IsTurretEquipped ? cu->SecondaryFacing.Current()
+                                                                                   : cu->PrimaryFacing.Current()) *
+                                    kDirToRad;
+                    ubo.ent_data0[entCount][0] = cwx;
+                    ubo.ent_data0[entCount][1] = cwy;
+                    ubo.ent_data0[entCount][2] = 0.11f;
+                    ubo.ent_data0[entCount][3] = static_cast<float>(cPacked);
+                    ubo.ent_data1[entCount][0] = cYaw;
+                    ubo.ent_data1[entCount][1] = cTurYaw;
+                    ubo.ent_data1[entCount][2] = cHealth;
+                    ubo.ent_data1[entCount][3] = 0.0f;
+                    entCount++;
+                } else if (cargo->What_Am_I() == RTTI_INFANTRY) {
+                    const InfantryClass* ci = static_cast<const InfantryClass*>(cargo);
+                    int cSub = std::max(0, std::min(127, static_cast<int>(*ci)));
+                    int cPacked = 2 | (cSub << 3) | (cHouse << 10);
+                    ubo.ent_data0[entCount][0] = cwx;
+                    ubo.ent_data0[entCount][1] = cwy;
+                    ubo.ent_data0[entCount][2] = 0.11f;
+                    ubo.ent_data0[entCount][3] = static_cast<float>(cPacked);
+                    ubo.ent_data1[entCount][0] = cYaw;
+                    ubo.ent_data1[entCount][1] = cYaw;
+                    ubo.ent_data1[entCount][2] = cHealth;
+                    ubo.ent_data1[entCount][3] = 1.0f;
+                    entCount++;
+                }
+                cargo = static_cast<const TechnoClass*>(cargo->Next);
+            }
+        }
 
         if (u->IsInRecoilState) {
             float mzx = wx + std::sin(turYaw) * 0.42f;
@@ -2793,7 +2853,7 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
 
         float wx = toLocalCellX(center);
         float wy = toLocalCellY(center);
-        if (!inTacticalMargin(wx, wy, 1.0f)) continue;
+        if (!inTacticalMargin(wx, wy, 1.2f)) continue;
 
         int subType = std::max(0, std::min(127, static_cast<int>(*inf)));
         int houseId = Map_House_To_Color_ID(inf->Owner());
@@ -2818,41 +2878,7 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         entCount++;
     }
 
-    // 6. Extract 3D Trees, Blossom Trees & Outcrop Rocks (Terrains)
-    for (int i = 0; i < Terrains.Count() && entCount < 128; ++i) {
-        TerrainClass* ter = Terrains.Ptr(i);
-        if (!ter || !ter->IsActive || ter->IsInLimbo || !ter->Class) continue;
-
-        COORDINATE center = ter->Target_Coord();
-        CELL c = Coord_Cell(center);
-        if (!Debug_Unshroud && PlayerPtr != nullptr && !(*this)[c].Is_Mapped(PlayerPtr)) {
-            continue;
-        }
-
-        float wx = toLocalCellX(center);
-        float wy = toLocalCellY(center);
-        if (!inTacticalMargin(wx, wy, 1.5f)) continue;
-
-        int subType = std::max(0, std::min(127, static_cast<int>(*ter)));
-        int packedType = 4 | (subType << 3);
-
-        ubo.ent_data0[entCount][0] = wx;
-        ubo.ent_data0[entCount][1] = wy;
-        ubo.ent_data0[entCount][2] = 0.0f;
-        ubo.ent_data0[entCount][3] = static_cast<float>(packedType);
-
-        ubo.ent_data1[entCount][0] = 0.0f;
-        ubo.ent_data1[entCount][1] = 0.0f;
-        ubo.ent_data1[entCount][2] = 0.99f;
-        ubo.ent_data1[entCount][3] = 1.0f;
-        entCount++;
-
-        if (subType == TERRAIN_BLOSSOMTREE1 || subType == TERRAIN_BLOSSOMTREE2) {
-            addPointLight(wx, wy, 0.45f, 2.6f, 0.12f, 0.98f, 0.35f, 1.35f);
-        }
-    }
-
-    // 7. Extract 3D Projectiles, Rockets, Shells & Obelisk Lasers (Bullets)
+    // 6. Extract 3D Projectiles, Rockets, Shells & Obelisk Lasers (Bullets)
     for (int i = 0; i < Bullets.Count() && entCount < 128; ++i) {
         BulletClass* bul = Bullets.Ptr(i);
         if (!bul || !bul->IsActive || bul->IsInLimbo || !bul->Class) continue;
@@ -2889,7 +2915,7 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         entCount++;
     }
 
-    // 8. Extract 3D Volumetric Explosions, Fireballs, Flames & Ion Cannon (Anims)
+    // 7. Extract 3D Volumetric Explosions, Fireballs, Flames & Ion Cannon (Anims)
     for (int i = 0; i < Anims.Count() && entCount < 128; ++i) {
         AnimClass* anim = Anims.Ptr(i);
         if (!anim || !anim->IsActive || anim->IsInLimbo) continue;
@@ -2931,9 +2957,44 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         }
     }
 
+    // 8. Extract 3D Trees, Blossom Trees & Outcrop Rocks (Terrains)
+    for (int i = 0; i < Terrains.Count() && entCount < 128; ++i) {
+        TerrainClass* ter = Terrains.Ptr(i);
+        if (!ter || !ter->IsActive || ter->IsInLimbo || !ter->Class) continue;
+
+        COORDINATE center = ter->Target_Coord();
+        CELL c = Coord_Cell(center);
+        if (!Debug_Unshroud && PlayerPtr != nullptr && !(*this)[c].Is_Mapped(PlayerPtr)) {
+            continue;
+        }
+
+        float wx = toLocalCellX(center);
+        float wy = toLocalCellY(center);
+        if (!inTacticalMargin(wx, wy, 1.2f)) continue;
+
+        int subType = std::max(0, std::min(127, static_cast<int>(*ter)));
+        int packedType = 4 | (subType << 3);
+
+        ubo.ent_data0[entCount][0] = wx;
+        ubo.ent_data0[entCount][1] = wy;
+        ubo.ent_data0[entCount][2] = 0.0f;
+        ubo.ent_data0[entCount][3] = static_cast<float>(packedType);
+
+        ubo.ent_data1[entCount][0] = 0.0f;
+        ubo.ent_data1[entCount][1] = 0.0f;
+        ubo.ent_data1[entCount][2] = 0.99f;
+        ubo.ent_data1[entCount][3] = 1.0f;
+        entCount++;
+
+        if (subType == TERRAIN_BLOSSOMTREE1 || subType == TERRAIN_BLOSSOMTREE2) {
+            addPointLight(wx, wy, 0.45f, 2.6f, 0.12f, 0.98f, 0.35f, 1.35f);
+        }
+    }
+
+    int playerHouseId = PlayerPtr ? Map_House_To_Color_ID(PlayerPtr->Class->House) : 0;
     ubo.view_params3[0] = static_cast<float>(entCount);
     ubo.view_params3[1] = static_cast<float>(lightCount);
-    ubo.view_params3[2] = static_cast<float>(PlayerPtr ? Map_House_To_Color_ID(PlayerPtr->Class->House) : 0);
+    ubo.view_params3[2] = static_cast<float>(playerHouseId) + std::min(0.95f, std::max(0.0f, msgV1));
     ubo.view_params3[3] = 1.0f;
 
     Video_Set_Tactical_3D_State(true, &ubo);
