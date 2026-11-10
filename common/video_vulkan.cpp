@@ -843,7 +843,8 @@ static bool Create_Swapchain(uint32_t reqWidth, uint32_t reqHeight)
     scInfo.imageColorSpace = chosenFormat.colorSpace;
     scInfo.imageExtent = extent;
     scInfo.imageArrayLayers = 1;
-    scInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    scInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                        (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
     scInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     scInfo.preTransform = caps.currentTransform;
     scInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
@@ -1926,7 +1927,7 @@ public:
                             int dx = startX + cx;
                             if (dx < 0 || dx >= width) continue;
 
-                            bool inTac = (dx >= tacX0 && dx < tacX1 && dy >= tacY0 && dy < tacY1);
+                            bool inTac = (dx >= tacX0 && dx < tacX1 && dy >= 0 && dy < tacY1);
                             bool inDlg = hasDlg && (dx >= dlgX0 && dx <= dlgX1 && dy >= dlgY0 && dy <= dlgY1);
                             bool inTip = hasTip && (dx >= tipX0 && dx <= tipX1 && dy >= tipY0 && dy <= tipY1);
                             bool inMsg = (msgY1 > 0 && dy <= msgY1);
@@ -1944,10 +1945,17 @@ public:
                         }
                     }
 
-                    tactical3DState.ubo.overlay_rects[3][0] = static_cast<float>(startX) / static_cast<float>(gw);
-                    tactical3DState.ubo.overlay_rects[3][1] = static_cast<float>(startY) / static_cast<float>(gh);
-                    tactical3DState.ubo.overlay_rects[3][2] = static_cast<float>(startX + hwcursor.W) / static_cast<float>(gw);
-                    tactical3DState.ubo.overlay_rects[3][3] = static_cast<float>(startY + hwcursor.H) / static_cast<float>(gh);
+                    if (startX <= 1 && startY <= 1) {
+                        tactical3DState.ubo.overlay_rects[3][0] = -1.0f;
+                        tactical3DState.ubo.overlay_rects[3][1] = -1.0f;
+                        tactical3DState.ubo.overlay_rects[3][2] = -1.0f;
+                        tactical3DState.ubo.overlay_rects[3][3] = -1.0f;
+                    } else {
+                        tactical3DState.ubo.overlay_rects[3][0] = static_cast<float>(startX) / static_cast<float>(gw);
+                        tactical3DState.ubo.overlay_rects[3][1] = static_cast<float>(startY) / static_cast<float>(gh);
+                        tactical3DState.ubo.overlay_rects[3][2] = static_cast<float>(startX + hwcursor.W) / static_cast<float>(gw);
+                        tactical3DState.ubo.overlay_rects[3][3] = static_cast<float>(startY + hwcursor.H) / static_cast<float>(gh);
+                    }
                 } else {
                     for (int cy = 0; cy < hwcursor.H; ++cy) {
                         int dy = startY + cy;
@@ -2183,6 +2191,111 @@ public:
         submitInfo.pSignalSemaphoreInfos = signalSemInfos;
 
         vkQueueSubmit2(vkCtx.graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+
+        // Optional automated GPU swapchain frame capture for visual round-trip verification
+        if (const char* capPath = std::getenv("CNC_CAPTURE_PATH")) {
+            static int s_capturedFrames = 0;
+            static bool s_doneCapture = false;
+            bool wantMenu = (std::getenv("CNC_CAPTURE_MENU") != nullptr);
+            bool readyMode = wantMenu ? ultraMenuState.active : (tactical3DState.active && tactical3DState.ubo.view_params3[3] > 0.95f);
+            if (!s_doneCapture && readyMode) {
+                int targetFrame = 65;
+                if (const char* tfEnv = std::getenv("CNC_CAPTURE_FRAME")) {
+                    targetFrame = std::max(1, std::atoi(tfEnv));
+                }
+                if (++s_capturedFrames >= targetFrame) {
+                    s_doneCapture = true;
+                    vkDeviceWaitIdle(vkCtx.device);
+
+                    VkDeviceSize bufSize = static_cast<VkDeviceSize>(vkCtx.swapchainWidth) * vkCtx.swapchainHeight * 4;
+                    VkBuffer readBuf = VK_NULL_HANDLE;
+                    VkDeviceMemory readMem = VK_NULL_HANDLE;
+                    if (Create_Buffer(bufSize,
+                                      VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                      readBuf,
+                                      readMem)) {
+                        vkResetCommandPool(vkCtx.device, fr.commandPool, 0);
+                        VkCommandBufferBeginInfo capBegin{};
+                        capBegin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+                        capBegin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+                        vkBeginCommandBuffer(fr.commandBuffer, &capBegin);
+
+                        VkImageMemoryBarrier2 toSrc{};
+                        toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                        toSrc.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                        toSrc.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+                        toSrc.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                        toSrc.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+                        toSrc.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+                        toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                        toSrc.image = vkCtx.swapchainImages[imageIndex];
+                        toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+                        VkDependencyInfo depSrc{};
+                        depSrc.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                        depSrc.imageMemoryBarrierCount = 1;
+                        depSrc.pImageMemoryBarriers = &toSrc;
+                        vkCmdPipelineBarrier2(fr.commandBuffer, &depSrc);
+
+                        VkBufferImageCopy reg{};
+                        reg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                        reg.imageExtent = {vkCtx.swapchainWidth, vkCtx.swapchainHeight, 1};
+                        vkCmdCopyImageToBuffer(fr.commandBuffer,
+                                               vkCtx.swapchainImages[imageIndex],
+                                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                               readBuf,
+                                               1,
+                                               &reg);
+
+                        VkImageMemoryBarrier2 backPres = toSrc;
+                        backPres.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                        backPres.srcAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+                        backPres.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
+                        backPres.dstAccessMask = 0;
+                        backPres.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                        backPres.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+                        vkCmdPipelineBarrier2(fr.commandBuffer, &depSrc);
+
+                        vkEndCommandBuffer(fr.commandBuffer);
+
+                        VkSubmitInfo capSub{};
+                        capSub.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                        capSub.commandBufferCount = 1;
+                        capSub.pCommandBuffers = &fr.commandBuffer;
+                        vkQueueSubmit(vkCtx.graphicsQueue, 1, &capSub, VK_NULL_HANDLE);
+                        vkDeviceWaitIdle(vkCtx.device);
+
+                        void* mapped = nullptr;
+                        if (vkMapMemory(vkCtx.device, readMem, 0, bufSize, 0, &mapped) == VK_SUCCESS && mapped) {
+                            FILE* fp = std::fopen(capPath, "wb");
+                            if (fp) {
+                                std::fprintf(fp, "P6\n%u %u\n255\n", vkCtx.swapchainWidth, vkCtx.swapchainHeight);
+                                const uint8_t* px = static_cast<const uint8_t*>(mapped);
+                                bool isBGRA = (vkCtx.swapchainFormat == VK_FORMAT_B8G8R8A8_UNORM ||
+                                               vkCtx.swapchainFormat == VK_FORMAT_B8G8R8A8_SRGB);
+                                size_t totalPx = static_cast<size_t>(vkCtx.swapchainWidth) * vkCtx.swapchainHeight;
+                                std::vector<uint8_t> rgb(totalPx * 3);
+                                for (size_t i = 0; i < totalPx; ++i) {
+                                    rgb[i * 3 + 0] = isBGRA ? px[i * 4 + 2] : px[i * 4 + 0];
+                                    rgb[i * 3 + 1] = px[i * 4 + 1];
+                                    rgb[i * 3 + 2] = isBGRA ? px[i * 4 + 0] : px[i * 4 + 2];
+                                }
+                                std::fwrite(rgb.data(), 1, rgb.size(), fp);
+                                std::fclose(fp);
+                            }
+                            vkUnmapMemory(vkCtx.device, readMem);
+                        }
+                        vkDestroyBuffer(vkCtx.device, readBuf, nullptr);
+                        vkFreeMemory(vkCtx.device, readMem, nullptr);
+
+                        if (std::getenv("CNC_CAPTURE_EXIT") != nullptr) {
+                            std::_Exit(0);
+                        }
+                    }
+                }
+            }
+        }
 
         VkPresentInfoKHR presentInfo{};
         presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;

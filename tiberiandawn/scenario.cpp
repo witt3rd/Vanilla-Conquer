@@ -109,7 +109,9 @@ bool Start_Scenario(char* root, bool briefing)
     }
     CCDebugString("C&C95 - Scenario read OK.\n");
 
-    if (Is_Demo()) {
+    if (std::getenv("CNC_AUTO_SCENARIO") != nullptr) {
+        Theme.Queue_Song(THEME_AOI);
+    } else if (Is_Demo()) {
         if (briefing) {
             Play_Movie(BriefMovie);
             Play_Movie(ActionMovie, Scen.TransitTheme);
@@ -482,7 +484,9 @@ void Do_Win(void)
     **	Do the ending screens only if not playing back a recorded game.
     */
     if (!PlaybackGame) {
-        if (Is_Demo()) {
+        if (std::getenv("CNC_AUTO_SCENARIO") != nullptr) {
+        Theme.Queue_Song(THEME_AOI);
+    } else if (Is_Demo()) {
             switch (Scen.Scenario) {
             case 1:
                 Score.Presentation();

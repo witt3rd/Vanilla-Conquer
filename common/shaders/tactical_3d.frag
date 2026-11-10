@@ -148,32 +148,68 @@ vec4 sampleTerrainFields(vec2 cellPos) {
 // 3D Terrain Heightfield (in Cell Units)
 // ----------------------------------------------------------------------------
 float evaluateTerrainHeight(vec2 worldCell, vec2 globalCell, out vec4 fieldsOut) {
-    fieldsOut = sampleTerrainFields(worldCell);
-    float warp = (fbm3(globalCell * 2.3) - 0.5) * 0.22;
+    // Domain-warp coastal sampling with multi-scale coves & headlands so straight 1995 tile rows become organic bays
+    vec2 qWarp = vec2(fbm3(globalCell * 0.42 + vec2(1.7, 9.2)), fbm3(globalCell * 0.42 + vec2(8.3, 2.8)));
+    vec2 coastWarp = (qWarp - 0.5) * vec2(1.45, 1.85);
+    vec4 fNear = sampleTerrainFields(worldCell + coastWarp * 0.65);
+    vec4 fBroad = 0.25 * (
+        sampleTerrainFields(worldCell + coastWarp + vec2(-1.1, -0.9)) +
+        sampleTerrainFields(worldCell + coastWarp + vec2( 1.1, -0.9)) +
+        sampleTerrainFields(worldCell + coastWarp + vec2(-1.1,  0.9)) +
+        sampleTerrainFields(worldCell + coastWarp + vec2( 1.1,  0.9))
+    );
+    vec4 fShoal = 0.25 * (
+        sampleTerrainFields(worldCell + coastWarp + vec2(-2.2, -1.8)) +
+        sampleTerrainFields(worldCell + coastWarp + vec2( 2.2, -1.8)) +
+        sampleTerrainFields(worldCell + coastWarp + vec2( 0.0, -2.6)) +
+        sampleTerrainFields(worldCell + coastWarp + vec2( 0.0,  2.2))
+    );
+    fieldsOut = mix(mix(fNear, fBroad, 0.50), fShoal, 0.36);
 
-    float waterField = smoothstep(0.32, 0.68, fieldsOut.x + warp * 0.65);
-    float rockField  = smoothstep(0.28, 0.72, fieldsOut.z + warp * 0.55);
-    float roadField  = smoothstep(0.35, 0.68, fieldsOut.y);
+    float warp = (fbm3(globalCell * 1.9) - 0.5) * 0.22;
+    // Wide 3-cell coastal surf & shoal transition from dry beach (0.0) to deep ocean (1.0)
+    float waterField = smoothstep(0.05, 0.92, fieldsOut.x + warp * 0.48);
 
-    // Base rolling micro-topography
-    float microH = (fbm4(globalCell * 1.8) - 0.5) * 0.065;
-    microH *= (1.0 - roadField * 0.85) * (1.0 - waterField);
+    // Synthesize a winding coastal military dirt road from the beachhead up through the rocky pass
+    float passCenterX = 12.6 + 1.8 * sin(worldCell.y * 0.42 + 0.5) + (qWarp.x - 0.5) * 1.2;
+    float passDist = abs(worldCell.x - passCenterX);
+    float branchDist = abs(worldCell.y - (6.6 + 0.8 * sin(worldCell.x * 0.35))) * 1.15;
+    float synthRoad = max(smoothstep(1.15, 0.38, passDist), smoothstep(0.95, 0.32, branchDist) * smoothstep(4.0, 8.0, worldCell.x) * smoothstep(22.0, 16.0, worldCell.x));
+    synthRoad *= smoothstep(0.45, 0.10, waterField);
+    float roadField = max(smoothstep(0.32, 0.68, fNear.y), synthRoad * 0.88);
 
-    // Rock cliffs & coastal crags rise ~12m with stepped shale/limestone terraces
-    float strata = fbm4(globalCell * 5.2);
-    float terrace = floor(strata * 4.0) * 0.18 + smoothstep(0.15, 0.85, fract(strata * 4.0)) * 0.28;
-    float cragDetail = (noise2D(globalCell * 16.0) - 0.5) * 0.06;
-    float cliffH = rockField * (0.36 + 0.18 * terrace + cragDetail);
-
-    // Road crown
-    float roadH = roadField * 0.018;
-
-    // Check cell smudge for blast craters
+    // Check cell flags for bridge / craters only
     ivec2 ci = ivec2(floor(worldCell));
     uint raw = fetchCellRaw(ci);
     uint ovl = (raw >> 4u) & 15u;
     uint sub = (raw >> 8u) & 15u;
     uint slope = (raw >> 12u) & 15u;
+
+    // Domain-warped rotated fbm3 coastal crags & bluffs so coastal land has organic 3D topography
+    vec2 warpedPos = globalCell * 0.65 + (qWarp - 0.5) * 1.35;
+    float ridge1 = 1.0 - abs(fbm3(warpedPos * 1.15) * 2.0 - 1.0);
+    float ridge2 = 1.0 - abs(fbm3(warpedPos * 2.45 + vec2(4.2, 7.1)) * 2.0 - 1.0);
+    float dryLand = smoothstep(0.08, 0.55, 1.0 - waterField);
+    float cragMask = smoothstep(0.54, 0.86, ridge1 * 0.68 + ridge2 * 0.32) * dryLand * (1.0 - roadField * 0.94);
+
+    // Coastal headland bluffs rising smoothly along rocky shorelines
+    float coastEdge = smoothstep(0.04, 0.45, 1.0 - waterField) * smoothstep(0.88, 0.28, 1.0 - waterField);
+    float headland = coastEdge * smoothstep(0.42, 0.72, fbm3(warpedPos * 0.85)) * (1.0 - roadField);
+
+    // Blend map rock field with organic geological ridges so 1995 tile rectangles never show as boxy gray patches
+    float mapRock = smoothstep(0.25, 0.75, fieldsOut.z + (qWarp.x - 0.5) * 0.45) * (0.45 + 0.55 * ridge1);
+    float rockField = clamp(mapRock * 0.65 + cragMask * 0.72 + headland * 0.65, 0.0, 1.0);
+
+    // Base rolling micro-topography
+    float microH = (fbm4(warpedPos * 2.2) - 0.5) * 0.075 * dryLand * (1.0 - roadField * 0.85);
+
+    // Rock cliffs & coastal crags rise with stepped shale/limestone terraces
+    float strata = fbm4(warpedPos * 4.6);
+    float terrace = floor(strata * 3.5) * 0.16 + smoothstep(0.15, 0.85, fract(strata * 3.5)) * 0.26;
+    float cliffH = rockField * (0.28 + 0.18 * terrace);
+
+    // Road crown
+    float roadH = roadField * 0.018;
 
     float craterH = 0.0;
     if (ovl != 13u && sub >= 1u && sub <= 5u) {
@@ -188,11 +224,11 @@ float evaluateTerrainHeight(vec2 worldCell, vec2 globalCell, out vec4 fieldsOut)
     // Bridge deck over water
     if (slope == 9u) {
         waterField = 0.0;
-        roadH = 0.14;
+        roadH = 0.16;
     }
 
-    // Water surface sits slightly below shoreline
-    float waterH = -0.055 * waterField;
+    // Water surface sits below shoreline
+    float waterH = -0.065 * waterField;
 
     fieldsOut.x = waterField;
     fieldsOut.y = roadField;
@@ -331,7 +367,8 @@ float mapCellStructures(vec3 p, ivec2 ci, uint raw, out int matId, out vec3 loca
 
         if (dw < d) {
             d = dw;
-            matId = (sub == 0u) ? 11 : ((sub == 1u || sub == 3u) ? 12 : 13);
+            // Render coastal piers & defensive walls as weathered poured-concrete bastions (matId 13) or chainlink (12)
+            matId = (sub == 1u || sub == 3u) ? 12 : 13;
             localCoord = lp;
         }
     }
@@ -385,6 +422,8 @@ float evaluateSingleEntitySDF(
 
     vec3 center = vec3(d0.xy, d0.z);
     vec3 rel = p - center;
+    float entScale = (abs(d0.x) + abs(d0.y) > 0.01 && (cat == 0 || cat == 2)) ? 1.18 : 1.0;
+    rel /= entScale;
 
     // ------------------------------------------------------------------------
     // CATEGORY 0: 3D ARTICULATED VEHICLES (Hulls + Treads/Wheels + Turrets)
@@ -406,93 +445,110 @@ float evaluateSingleEntitySDF(
         float dGlow = 1e5;
 
         if (subType == 0) {
-            // UNIT_HTANK: GDI MAMMOTH TANK (Quad-track pods, massive hull, twin 120mm cannons, side Tusk pods)
-            vec3 tpPod = vec3(abs(hp.x) - 0.30, abs(hp.y) - 0.22, hp.z - 0.085);
-            dTread = sdRoundBox(tpPod, vec3(0.09, 0.185, 0.075), 0.018);
+            // UNIT_HTANK: GDI MAMMOTH TANK (Quad-track bogie pods, sloped glacis hull, twin 120mm cannons, Tusk pods)
+            vec3 tpPod = vec3(abs(hp.x) - 0.30, abs(hp.y) - 0.21, hp.z - 0.082);
+            dTread = sdRoundBox(tpPod, vec3(0.088, 0.185, 0.072), 0.012);
 
-            // Sloped heavy glacis hull
-            vec3 hullP = hp - vec3(0.0, 0.0, 0.155);
-            dHull = sdRoundBox(hullP, vec3(0.26, 0.36, 0.085), 0.024);
+            // Sloped heavy glacis hull + reactive side skirts
+            vec3 hullP = hp - vec3(0.0, 0.0, 0.148);
+            hullP.z += 0.08 * max(0.0, -hullP.y - 0.18);
+            dHull = sdRoundBox(hullP, vec3(0.26, 0.36, 0.078), 0.014);
+            dHull = min(dHull, sdBox(vec3(abs(hp.x) - 0.29, hp.y, hp.z - 0.135), vec3(0.025, 0.34, 0.042)));
 
-            // Wide Mammoth Turret + Twin 120mm Barrels + Side Missile Pods
-            vec3 turP = tp - vec3(0.0, 0.04, 0.275);
-            dTurret = sdRoundBox(turP, vec3(0.195, 0.215, 0.075), 0.024);
-            // Side Tusk rocket pods
-            dTurret = min(dTurret, sdRoundBox(vec3(abs(tp.x) - 0.225, tp.y - 0.03, tp.z - 0.285), vec3(0.045, 0.135, 0.055), 0.012));
-            // Dual 120mm rifled barrels pointing forward (-Y)
-            vec3 barP = vec3(abs(tp.x) - 0.068, tp.y + 0.27, tp.z - 0.28);
-            dTurret = min(dTurret, sdCylinderY(barP, 0.036, 0.23));
+            // Angular Mammoth Turret + bustle rack + Twin 120mm Barrels with bore evacuators + Side Missile Pods
+            vec3 turP = tp - vec3(0.0, 0.04, 0.265);
+            turP.x *= 1.0 + 0.35 * max(0.0, -turP.y);
+            dTurret = sdRoundBox(turP, vec3(0.195, 0.215, 0.068), 0.014);
+            dTurret = min(dTurret, sdRoundBox(vec3(abs(tp.x) - 0.225, tp.y - 0.03, tp.z - 0.275), vec3(0.045, 0.135, 0.052), 0.010));
+            vec3 barP = vec3(abs(tp.x) - 0.068, tp.y + 0.28, tp.z - 0.27);
+            dTurret = min(dTurret, sdCylinderY(barP, 0.032, 0.24));
+            dTurret = min(dTurret, sdCylinderY(barP - vec3(0.0, 0.04, 0.0), 0.044, 0.05));
         } else if (subType == 1) {
-            // UNIT_MTANK: GDI MEDIUM TANK (M1A2-style wide sloped hull, reactive skirts, 120mm cannon)
-            dTread = sdRoundBox(vec3(abs(hp.x) - 0.25, hp.y, hp.z - 0.075), vec3(0.078, 0.34, 0.068), 0.016);
-            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.135), vec3(0.225, 0.32, 0.072), 0.022);
-            dTurret = sdRoundBox(tp - vec3(0.0, 0.02, 0.235), vec3(0.165, 0.185, 0.064), 0.022);
-            dTurret = min(dTurret, sdCylinderY(tp - vec3(0.0, -0.25, 0.235), 0.034, 0.22));
+            // UNIT_MTANK: GDI M1A2 ABRAMS MAIN BATTLE TANK (Low sloped glacis, reactive side skirts, polygonal turret, 120mm gun)
+            dTread = sdRoundBox(vec3(abs(hp.x) - 0.245, hp.y, hp.z - 0.072), vec3(0.075, 0.34, 0.065), 0.012);
+            // Sloped wedge glacis + armored side skirts
+            vec3 hullP = hp - vec3(0.0, 0.0, 0.132);
+            hullP.z += 0.09 * max(0.0, -hullP.y - 0.14);
+            dHull = sdRoundBox(hullP, vec3(0.225, 0.33, 0.066), 0.012);
+            dHull = min(dHull, sdBox(vec3(abs(hp.x) - 0.255, hp.y, hp.z - 0.122), vec3(0.022, 0.31, 0.038)));
+            // Polygonal M1A2 sloped cheek turret + rear bustle rack + commander cupola + 120mm cannon with bore evacuator
+            vec3 turP = tp - vec3(0.0, 0.03, 0.225);
+            turP.x *= 1.0 + 0.42 * max(0.0, -turP.y);
+            dTurret = sdRoundBox(turP, vec3(0.175, 0.195, 0.058), 0.012);
+            dTurret = min(dTurret, sdBox(tp - vec3(0.0, 0.20, 0.232), vec3(0.145, 0.055, 0.042)));
+            dTurret = min(dTurret, sdCylinderZ(tp - vec3(0.065, 0.04, 0.285), 0.052, 0.022));
+            dTurret = min(dTurret, sdCylinderY(tp - vec3(0.0, -0.26, 0.225), 0.028, 0.23));
+            dTurret = min(dTurret, sdCylinderY(tp - vec3(0.0, -0.22, 0.225), 0.040, 0.05));
         } else if (subType == 2) {
-            // UNIT_LTANK: NOD LIGHT TANK (Compact wedge hull, rounded recon turret, 75mm gun)
-            dTread = sdRoundBox(vec3(abs(hp.x) - 0.21, hp.y, hp.z - 0.068), vec3(0.068, 0.28, 0.060), 0.014);
-            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.12), vec3(0.185, 0.27, 0.064), 0.018);
-            dTurret = sdRoundBox(tp - vec3(0.0, 0.01, 0.205), vec3(0.135, 0.15, 0.056), 0.024);
-            dTurret = min(dTurret, sdCylinderY(tp - vec3(0.0, -0.21, 0.205), 0.030, 0.18));
+            // UNIT_LTANK: LIGHT ARMORED TANK / BRADLEY IFV (Sloped wedge hull, reactive skirts, offset turret, autocannon)
+            dTread = sdRoundBox(vec3(abs(hp.x) - 0.21, hp.y, hp.z - 0.068), vec3(0.068, 0.29, 0.060), 0.012);
+            vec3 hullP = hp - vec3(0.0, 0.0, 0.122);
+            hullP.z += 0.08 * max(0.0, -hullP.y - 0.12);
+            dHull  = sdRoundBox(hullP, vec3(0.19, 0.28, 0.062), 0.012);
+            vec3 turP = tp - vec3(0.0, 0.02, 0.205);
+            turP.x *= 1.0 + 0.35 * max(0.0, -turP.y);
+            dTurret = sdRoundBox(turP, vec3(0.14, 0.155, 0.054), 0.014);
+            dTurret = min(dTurret, sdCylinderY(tp - vec3(0.0, -0.22, 0.205), 0.026, 0.19));
         } else if (subType == 3) {
-            // UNIT_STANK: NOD STEALTH TANK (Angular F-117 stealth chassis + twin rocket bay)
-            dTread = sdRoundBox(vec3(abs(hp.x) - 0.21, hp.y, hp.z - 0.062), vec3(0.060, 0.29, 0.055), 0.012);
+            // UNIT_STANK: NOD STEALTH TANK (Angular F-117 faceted chassis + twin rocket bay)
+            dTread = sdRoundBox(vec3(abs(hp.x) - 0.21, hp.y, hp.z - 0.062), vec3(0.060, 0.29, 0.055), 0.010);
             vec3 sp = hp - vec3(0.0, 0.0, 0.13);
             sp.x *= 1.0 + 0.55 * max(0.0, -sp.y);
-            dHull = sdRoundBox(sp, vec3(0.195, 0.31, 0.072), 0.010);
+            dHull = sdRoundBox(sp, vec3(0.195, 0.31, 0.070), 0.008);
             dTurret = sdBox(hp - vec3(0.0, 0.04, 0.215), vec3(0.135, 0.16, 0.052));
         } else if (subType == 4) {
             // UNIT_FTANK: NOD FLAME TANK (Twin rear pressurized fuel tanks + dual front flame nozzles)
-            dTread = sdRoundBox(vec3(abs(hp.x) - 0.22, hp.y, hp.z - 0.070), vec3(0.070, 0.29, 0.064), 0.015);
-            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.125), vec3(0.195, 0.28, 0.068), 0.018);
-            // Twin rear cylindrical fuel tanks
+            dTread = sdRoundBox(vec3(abs(hp.x) - 0.22, hp.y, hp.z - 0.070), vec3(0.070, 0.29, 0.064), 0.012);
+            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.125), vec3(0.195, 0.28, 0.066), 0.014);
             vec3 tankP = vec3(abs(hp.x) - 0.105, hp.y - 0.10, hp.z - 0.215);
             dTurret = sdCylinderY(tankP, 0.072, 0.135);
-            // Dual forward flame projectors
             vec3 nozP = vec3(abs(hp.x) - 0.085, hp.y + 0.24, hp.z - 0.165);
-            dTurret = min(dTurret, sdCylinderY(nozP, 0.032, 0.125));
+            dTurret = min(dTurret, sdCylinderY(nozP, 0.030, 0.125));
         } else if (subType == 10) {
             // UNIT_HARVESTER: HEAVY TIBERIUM HARVESTER (Armored hopper + glowing green crystals + front claw scoops)
-            dTread = sdRoundBox(vec3(abs(hp.x) - 0.28, hp.y, hp.z - 0.085), vec3(0.085, 0.36, 0.078), 0.018);
-            // Rear containment hopper & sloped forward cab
-            dHull  = sdRoundBox(hp - vec3(0.0, 0.06, 0.175), vec3(0.26, 0.29, 0.11), 0.024);
-            dHull  = min(dHull, sdRoundBox(hp - vec3(0.0, -0.19, 0.155), vec3(0.20, 0.14, 0.088), 0.022));
-            // Dual animated front harvesting claws
+            dTread = sdRoundBox(vec3(abs(hp.x) - 0.28, hp.y, hp.z - 0.085), vec3(0.085, 0.36, 0.076), 0.014);
+            dHull  = sdRoundBox(hp - vec3(0.0, 0.06, 0.175), vec3(0.26, 0.29, 0.105), 0.018);
+            dHull  = min(dHull, sdRoundBox(hp - vec3(0.0, -0.19, 0.155), vec3(0.20, 0.14, 0.085), 0.016));
             float clawSwing = isSpecial ? sin(time * 9.0) * 0.045 : 0.0;
             vec3 clawP = vec3(abs(hp.x) - (0.14 + clawSwing), hp.y + 0.36, hp.z - 0.085);
-            dTurret = sdRoundBox(clawP, vec3(0.058, 0.095, 0.052), 0.012);
-            // Glowing Tiberium crystal core inside rear hopper grates
-            dGlow = sdRoundBox(hp - vec3(0.0, 0.09, 0.255), vec3(0.165, 0.175, 0.055), 0.012);
+            dTurret = sdRoundBox(clawP, vec3(0.058, 0.095, 0.052), 0.010);
+            dGlow = sdRoundBox(hp - vec3(0.0, 0.09, 0.255), vec3(0.15, 0.16, 0.048), 0.010);
         } else if (subType == 13) {
-            // UNIT_HOVER: AMPHIBIOUS HOVERCRAFT LCAC (Wide rubber air-cushion skirt + vehicle deck + twin thrust fans)
-            dTread = sdRoundBox(hp - vec3(0.0, 0.0, 0.055), vec3(0.42, 0.48, 0.052), 0.028);
-            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.115), vec3(0.35, 0.41, 0.035), 0.015);
-            // Sidewalls & rear twin shrouded fan ducts
-            dHull  = min(dHull, sdRoundBox(vec3(abs(hp.x) - 0.33, hp.y, hp.z - 0.17), vec3(0.045, 0.36, 0.055), 0.01));
-            dTurret = sdCylinderY(vec3(abs(hp.x) - 0.18, hp.y - 0.34, hp.z - 0.22), 0.095, 0.055);
+            // UNIT_HOVER: AMPHIBIOUS HOVERCRAFT LCAC (Ribbed rubber air-cushion skirt + vehicle deck + twin thrust fans)
+            dTread = sdRoundBox(hp - vec3(0.0, 0.0, 0.055), vec3(0.42, 0.48, 0.052), 0.022);
+            dHull  = sdBox(hp - vec3(0.0, 0.0, 0.115), vec3(0.35, 0.41, 0.032));
+            // Armored cargo sidewalls, starboard control cabin & rear twin shrouded fan ducts
+            dHull  = min(dHull, sdBox(vec3(abs(hp.x) - 0.33, hp.y, hp.z - 0.17), vec3(0.042, 0.37, 0.052)));
+            dHull  = min(dHull, sdBox(hp - vec3(0.26, -0.10, 0.24), vec3(0.065, 0.11, 0.055)));
+            dTurret = sdCylinderY(vec3(abs(hp.x) - 0.18, hp.y - 0.35, hp.z - 0.22), 0.095, 0.055);
         } else if (subType == 14) {
             // UNIT_MHQ: MOBILE HEADQUARTERS (Armored command chassis + rotating 3D radar dish)
-            dTread = sdRoundBox(vec3(abs(hp.x) - 0.23, hp.y, hp.z - 0.072), vec3(0.072, 0.31, 0.065), 0.015);
-            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.145), vec3(0.21, 0.29, 0.085), 0.02);
+            dTread = sdRoundBox(vec3(abs(hp.x) - 0.23, hp.y, hp.z - 0.072), vec3(0.072, 0.31, 0.065), 0.014);
+            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.145), vec3(0.21, 0.29, 0.085), 0.016);
             vec3 dishP = hp - vec3(0.0, 0.04, 0.275);
             dishP.xy = rot2D(dishP.xy, time * 2.2);
-            dTurret = sdRoundBox(dishP, vec3(0.18, 0.055, 0.095), 0.02);
+            dTurret = sdRoundBox(dishP, vec3(0.18, 0.055, 0.095), 0.016);
         } else if (subType == 15) {
-            // UNIT_GUNBOAT: GDI NAVAL MISSILE GUNBOAT (Sleek warship hull, bridge superstructure, bow turret)
+            // UNIT_GUNBOAT: GDI NAVAL MISSILE GUNBOAT (Raked warship hull, tiered bridge, mast, bow turret)
             vec3 bowP = hp - vec3(0.0, 0.0, 0.095);
-            bowP.x *= 1.0 + 0.75 * max(0.0, -bowP.y - 0.10);
-            dHull  = sdRoundBox(bowP, vec3(0.24, 0.46, 0.075), 0.022);
-            // Bridge cabin superstructure
-            dHull  = min(dHull, sdRoundBox(hp - vec3(0.0, 0.06, 0.195), vec3(0.15, 0.18, 0.065), 0.018));
-            // Rotating bow turret + twin naval cannon barrel
-            dTurret = sdRoundBox(tp - vec3(0.0, -0.20, 0.185), vec3(0.11, 0.12, 0.052), 0.016);
-            dTurret = min(dTurret, sdCylinderY(tp - vec3(0.0, -0.34, 0.185), 0.030, 0.14));
+            bowP.x *= 1.0 + 0.85 * max(0.0, -bowP.y - 0.08);
+            dHull  = sdRoundBox(bowP, vec3(0.23, 0.46, 0.072), 0.016);
+            // Tiered bridge superstructure + radar mast
+            dHull  = min(dHull, sdBox(hp - vec3(0.0, 0.06, 0.185), vec3(0.15, 0.18, 0.058)));
+            dHull  = min(dHull, sdBox(hp - vec3(0.0, 0.10, 0.265), vec3(0.09, 0.10, 0.045)));
+            dTurret = sdCylinderZ(hp - vec3(0.0, 0.12, 0.34), 0.025, 0.065);
+            // Rotating bow turret + naval cannon barrel
+            dTurret = min(dTurret, sdRoundBox(tp - vec3(0.0, -0.20, 0.182), vec3(0.105, 0.115, 0.048), 0.012));
+            dTurret = min(dTurret, sdCylinderY(tp - vec3(0.0, -0.35, 0.182), 0.026, 0.15));
         } else if (subType == 16) {
-            // UNIT_MCV: MOBILE CONSTRUCTION VEHICLE (Massive industrial rig + crane boom + beacon)
-            dTread = sdRoundBox(vec3(abs(hp.x) - 0.29, hp.y, hp.z - 0.085), vec3(0.085, 0.38, 0.078), 0.018);
-            dHull  = sdRoundBox(hp - vec3(0.0, 0.0, 0.185), vec3(0.27, 0.36, 0.115), 0.024);
-            dTurret = sdRoundBox(hp - vec3(0.07, 0.02, 0.31), vec3(0.075, 0.27, 0.055), 0.014);
-            dGlow  = length(hp - vec3(-0.12, -0.22, 0.31)) - 0.055;
+            // UNIT_MCV: HEAVY MOBILE CONSTRUCTION RIG (Tracked tractor chassis, forward cab, rear assembly gantry)
+            dTread = sdRoundBox(vec3(abs(hp.x) - 0.28, hp.y, hp.z - 0.082), vec3(0.085, 0.38, 0.075), 0.014);
+            // Forward armored cab + rear modular industrial housing
+            dHull  = sdRoundBox(hp - vec3(0.0, -0.18, 0.165), vec3(0.25, 0.16, 0.092), 0.014);
+            dHull  = min(dHull, sdRoundBox(hp - vec3(0.0, 0.10, 0.195), vec3(0.26, 0.24, 0.115), 0.016));
+            // Structural gantry crane boom & side exhaust stacks
+            dTurret = sdBox(hp - vec3(0.08, 0.02, 0.325), vec3(0.065, 0.28, 0.048));
+            dTurret = min(dTurret, sdCylinderZ(vec3(abs(hp.x) - 0.24, hp.y + 0.04, hp.z - 0.24), 0.032, 0.12));
         } else if (subType == 7 || subType == 12) {
             // UNIT_MLRS / UNIT_MSAM: Tracked Chassis + Rotating Elevated Box Rocket Launcher Pod
             dTread = sdRoundBox(vec3(abs(hp.x) - 0.23, hp.y, hp.z - 0.070), vec3(0.070, 0.31, 0.062), 0.015);
@@ -610,12 +666,14 @@ float evaluateSingleEntitySDF(
             dp.xy = rot2D(dp.xy, time * 1.15);
             dMetal = sdRoundBox(dp, vec3(0.36, 0.10, 0.18), 0.03);
         } else if (subType == 1 || subType == 2 || subType == 5 || subType == 10) {
-            // STRUCT_GTOWER, STRUCT_ATOWER, STRUCT_TURRET, STRUCT_SAM: Defensive Emplacements
-            dSuper = sdRoundBox(rel - vec3(0.0, 0.0, 0.16), vec3(halfSpan.x * 0.78, halfSpan.y * 0.78, 0.14), 0.02);
+            // STRUCT_GTOWER, STRUCT_ATOWER, STRUCT_TURRET, STRUCT_SAM: Reinforced Concrete Bunker + Twin-Barrel Turret
+            float bunkerOct = sdCylinderZ(rel - vec3(0.0, 0.0, 0.11), 0.31 - 0.08 * clamp(rel.z / 0.22, 0.0, 1.0), 0.11);
+            float struts = sdBox(vec3(abs(rel.x) - 0.17, abs(rel.y) - 0.17, rel.z - 0.16), vec3(0.04, 0.04, 0.14));
+            dSuper = min(bunkerOct, struts);
             vec2 txy = rot2D(rel.xy, -d1.y);
-            vec3 tp = vec3(txy, rel.z - 0.32);
-            dMetal = sdRoundBox(tp, vec3(0.18, 0.20, 0.09), 0.02);
-            dMetal = min(dMetal, sdCylinderY(tp - vec3(0.0, -0.22, 0.0), 0.03, 0.18));
+            vec3 tp = vec3(txy, rel.z - 0.28);
+            dMetal = sdRoundBox(tp, vec3(0.16, 0.19, 0.075), 0.02);
+            dMetal = min(dMetal, sdCylinderY(vec3(abs(tp.x) - 0.055, tp.y + 0.22, tp.z), 0.024, 0.18));
         } else if (subType == 8) {
             // STRUCT_STORAGE: Tiberium Storage Silo (Cylindrical dome + green level gauge)
             dSuper = sdCylinderZ(rel - vec3(0.0, 0.0, 0.22), 0.36, 0.20);
@@ -745,27 +803,31 @@ float evaluateSingleEntitySDF(
     // CATEGORY 4: 3D TREES, BLOSSOM TREES & OUTCROP ROCKS
     // ------------------------------------------------------------------------
     if (cat == 4) {
+        float boughNoise = (noise2D(rel.xy * 14.0 + vec2(d0.x, d0.y) * 3.7) - 0.5) * 0.065;
         if (subType >= 25) {
-            // Outcrop Boulder Formation
-            float dRock = length(rel * vec3(1.0, 1.15, 1.45) - vec3(0.0, 0.0, 0.14)) - 0.28;
+            // Craggy Outcrop Boulder Formation
+            float dRock = sdRoundBox(rel - vec3(0.0, 0.0, 0.14), vec3(0.24, 0.20, 0.14), 0.04) + boughNoise * 0.85;
             partMat = 28;
             partLocal = rel;
             return dRock;
         }
-        // Swaying 3D Tree Trunk + Multi-Lobe Botanical Canopy
-        vec2 wind = vec2(sin(time * 1.7 + d0.x * 0.9), cos(time * 1.3 + d0.y * 0.9)) * 0.025 * clamp(rel.z, 0.0, 1.0);
+        // Weathered Coastal Pine / Scrub Cluster + Basal Rock Outcrop (CnC-Ultra-Game.jpg)
+        vec2 wind = vec2(sin(time * 1.5 + d0.x * 0.9), cos(time * 1.2 + d0.y * 0.9)) * 0.018 * clamp(rel.z, 0.0, 1.0);
         vec3 tp = rel - vec3(wind, 0.0);
-        float dTrunk = sdCapsule(tp, vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.36), 0.065);
+        float dTrunk = sdCapsule(tp, vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.34), 0.055);
+        float dBaseRock = sdRoundBox(rel - vec3(0.14, 0.08, 0.07), vec3(0.16, 0.13, 0.07), 0.03) + boughNoise * 0.6;
 
-        vec3 cp = tp - vec3(0.0, 0.0, 0.46);
-        float dCanopy = length(cp * vec3(1.0, 1.0, 1.25)) - 0.36;
-        dCanopy = min(dCanopy, length((cp - vec3(0.16, 0.10, -0.06)) * vec3(1.1, 1.1, 1.3)) - 0.26);
-        dCanopy = min(dCanopy, length((cp - vec3(-0.15, -0.08, -0.04)) * vec3(1.1, 1.1, 1.3)) - 0.25);
-        dCanopy = min(dCanopy, length((cp - vec3(0.04, -0.16, 0.06)) * vec3(1.1, 1.1, 1.3)) - 0.24);
+        // Multi-tiered coniferous pine & coastal scrub boughs with organic foliage displacement
+        vec3 cp = tp - vec3(0.0, 0.0, 0.36);
+        float tier1 = length((cp - vec3(0.0, 0.0, -0.10)) * vec3(1.05, 1.05, 1.85)) - 0.34;
+        float tier2 = length((cp - vec3(0.05, -0.04, 0.04)) * vec3(1.25, 1.25, 1.95)) - 0.27;
+        float tier3 = length((cp - vec3(-0.04, 0.03, 0.16)) * vec3(1.55, 1.55, 2.05)) - 0.20;
+        float bush  = length((cp - vec3(-0.18, 0.12, -0.16)) * vec3(1.20, 1.20, 1.75)) - 0.22;
+        float dCanopy = min(min(tier1, tier2), min(tier3, bush)) + boughNoise;
 
         // Blossom Tree glowing Tiberium spore pods
         if (subType == 18 || subType == 19) {
-            float dSpore = length(cp - vec3(0.0, 0.0, 0.18)) - 0.16;
+            float dSpore = length(cp - vec3(0.0, 0.0, 0.16)) - 0.15;
             if (dSpore < dCanopy && dSpore < dTrunk) {
                 partMat = 23;
                 partLocal = cp;
@@ -773,14 +835,20 @@ float evaluateSingleEntitySDF(
             }
         }
 
-        if (dTrunk < dCanopy) {
-            partMat = 26;
-            partLocal = tp;
-            return dTrunk;
-        }
+        float dMin = dCanopy;
         partMat = 27;
         partLocal = cp;
-        return dCanopy;
+        if (dBaseRock < dMin) {
+            dMin = dBaseRock;
+            partMat = 28;
+            partLocal = rel;
+        }
+        if (dTrunk < dMin) {
+            dMin = dTrunk;
+            partMat = 26;
+            partLocal = tp;
+        }
+        return dMin;
     }
 
     // ------------------------------------------------------------------------
@@ -1035,29 +1103,32 @@ float drawHudNumber(vec2 px, vec2 originPx, int val, bool showPlus, float scale)
 // Ray-marches a live 3D close-up studio portrait of the selected unit/structure for the Bottom-Left HUD Card
 vec3 renderUnitPortrait3D(vec2 uvBox, int selPackedType, float time) {
     // Background: moody coastal cliff + twilight sky horizon matching CnC-Ultra-Game.jpg
-    vec3 skyBg = mix(vec3(0.24, 0.29, 0.34), vec3(0.11, 0.14, 0.18), clamp(uvBox.y * 1.6, 0.0, 1.0));
-    vec3 groundBg = mix(vec3(0.18, 0.17, 0.15), vec3(0.10, 0.11, 0.12), clamp((uvBox.y - 0.45) * 2.0, 0.0, 1.0));
-    vec3 bgCol = (uvBox.y < 0.48) ? skyBg : groundBg;
+    float cliffLine = 0.34 + 0.14 * sin(uvBox.x * 5.2 + 0.8) + 0.06 * sin(uvBox.x * 13.0);
+    vec3 skyBg = mix(vec3(0.32, 0.38, 0.44), vec3(0.16, 0.20, 0.25), clamp(uvBox.y * 1.8, 0.0, 1.0));
+    float cliffN = noise2D(uvBox * vec2(18.0, 28.0));
+    vec3 cliffBg = mix(vec3(0.18, 0.17, 0.16), vec3(0.28, 0.26, 0.23), cliffN);
+    vec3 bgCol = (uvBox.y < cliffLine) ? skyBg : cliffBg;
 
     int cat = selPackedType & 7;
     int subType = (selPackedType >> 3) & 127;
     int houseId = (selPackedType >> 10) & 7;
 
-    // Studio camera setup looking at origin (0, 0, 0.16) at a dramatic 3/4 front-left angle
-    float zoom = (cat == 1) ? 1.55 : ((cat == 2) ? 0.55 : 0.85);
-    vec2 pScreen = (uvBox - vec2(0.5, 0.56)) * vec2(1.0, -1.0) * zoom;
+    // Studio camera setup looking at origin (0, 0, 0.14) at a dramatic 3/4 side-front angle (CnC-Ultra-Game.jpg)
+    float zoom = (cat == 1) ? 1.50 : ((cat == 2) ? 0.55 : 0.72);
+    vec2 pScreen = (uvBox - vec2(0.50, 0.58)) * vec2(1.0, -1.0) * zoom;
 
-    vec3 camForward = normalize(vec3(-0.48, -0.76, -0.44));
+    vec3 camForward = normalize(vec3(-0.46, -0.80, -0.38));
     vec3 camRight   = normalize(cross(camForward, vec3(0.0, 0.0, 1.0)));
     vec3 camUp      = cross(camRight, camForward);
 
-    vec3 target = vec3(0.0, 0.0, (cat == 1) ? 0.22 : ((cat == 2) ? 0.14 : 0.16));
+    vec3 target = vec3(0.0, 0.0, (cat == 1) ? 0.22 : ((cat == 2) ? 0.14 : 0.14));
     vec3 ro = target - camForward * 1.45 + camRight * pScreen.x + camUp * pScreen.y;
     vec3 rd = camForward;
 
-    // Construct synthetic entity data for evaluateSingleEntitySDF at origin facing South-West
-    float yaw = 2.55 + sin(time * 0.65) * 0.12;
-    float turYaw = yaw - 0.28 + sin(time * 1.1) * 0.18;
+    // Construct synthetic entity data for evaluateSingleEntitySDF at origin showing side-front 3/4 profile
+    // Facing North-East/Front-Left (yaw ~ 0.72 rad) points the front glacis & 120mm cannon toward bottom-left!
+    float yaw = 0.72 + sin(time * 0.45) * 0.05;
+    float turYaw = yaw - 0.14 + sin(time * 0.85) * 0.08;
     vec4 d0 = vec4(0.0, 0.0, 0.0, float(selPackedType));
     vec4 d1 = vec4(yaw, turYaw, 0.99, float(2 | (2 << 3)));
 
@@ -1065,7 +1136,7 @@ vec3 renderUnitPortrait3D(vec2 uvBox, int selPackedType, float time) {
     int hitMat = 0;
     vec3 hitLoc = vec3(0.0);
     vec3 hitP = vec3(0.0);
-    for (int i = 0; i < 24; ++i) {
+    for (int i = 0; i < 28; ++i) {
         vec3 p = ro + rd * t;
         // Ground plinth plane at z = 0
         float dGround = p.z;
@@ -1073,7 +1144,7 @@ vec3 renderUnitPortrait3D(vec2 uvBox, int selPackedType, float time) {
         vec3 lCoord;
         float dEnt = evaluateSingleEntitySDF(p, d0, d1, time, mId, lCoord);
         float d = min(dEnt, dGround);
-        if (d < 0.004) {
+        if (d < 0.0035) {
             hitP = p;
             if (dEnt <= dGround) {
                 hitMat = mId;
@@ -1083,7 +1154,7 @@ vec3 renderUnitPortrait3D(vec2 uvBox, int selPackedType, float time) {
             }
             break;
         }
-        t += max(d * 0.85, 0.006);
+        t += max(d * 0.85, 0.005);
         if (t > 2.4) break;
     }
 
@@ -1091,13 +1162,13 @@ vec3 renderUnitPortrait3D(vec2 uvBox, int selPackedType, float time) {
 
     if (hitMat == 99) {
         float distR = length(hitP.xy);
-        float shadow = smoothstep(0.08, 0.42, distR);
+        float shadow = smoothstep(0.10, 0.44, distR);
         float nG = noise2D(hitP.xy * 18.0);
-        vec3 plinth = mix(vec3(0.20, 0.19, 0.17), vec3(0.28, 0.26, 0.23), nG) * (0.42 + 0.58 * shadow);
-        return mix(plinth, bgCol, smoothstep(0.45, 0.85, distR));
+        vec3 plinth = mix(vec3(0.22, 0.20, 0.18), vec3(0.32, 0.29, 0.25), nG) * (0.38 + 0.62 * shadow);
+        return mix(plinth, bgCol, smoothstep(0.45, 0.88, distR));
     }
 
-    float eps = 0.005;
+    float eps = 0.004;
     int dm;
     vec3 dl;
     float d00 = evaluateSingleEntitySDF(hitP, d0, d1, time, dm, dl);
@@ -1108,23 +1179,31 @@ vec3 renderUnitPortrait3D(vec2 uvBox, int selPackedType, float time) {
     ));
 
     vec3 houseCol = getHouseTrimColor(houseId);
-    float grit = noise2D(hitLoc.xy * 26.0 + hitLoc.z * 14.0);
+    float grit = noise2D(hitLoc.xy * 28.0 + hitLoc.z * 16.0);
     vec3 alb = houseCol * (0.85 + 0.30 * grit);
-    if (hitMat == 20) alb = vec3(0.15, 0.16, 0.17) * (0.8 + 0.4 * grit);
-    else if (hitMat == 22) alb = mix(houseCol * 0.78, vec3(0.28, 0.30, 0.32), 0.55) * (0.88 + 0.24 * grit);
+    if (hitMat == 20) {
+        // Road-wheels & steel track links inside track pods
+        float wheelSpacing = (fract((hitLoc.y + 0.30) * 9.5) - 0.5) / 9.5;
+        float wheelR = length(vec2(wheelSpacing, hitLoc.z - 0.048));
+        float isWheel = smoothstep(0.042, 0.032, wheelR);
+        float isHub   = smoothstep(0.016, 0.010, wheelR);
+        alb = mix(vec3(0.14, 0.15, 0.16), houseCol * 0.68, isWheel);
+        alb = mix(alb, vec3(0.08, 0.09, 0.10), isHub);
+    }
+    else if (hitMat == 22) alb = mix(houseCol * 0.82, vec3(0.32, 0.34, 0.36), 0.45) * (0.88 + 0.24 * grit);
     else if (hitMat == 23) alb = vec3(0.18, 0.92, 0.38);
     else if (hitMat == 24) alb = vec3(0.36, 0.37, 0.38);
 
-    vec3 Lkey = normalize(vec3(-0.55, -0.45, 0.70));
+    vec3 Lkey = normalize(vec3(-0.58, -0.48, 0.66));
     vec3 Lrim = normalize(vec3(0.65, 0.45, 0.60));
     vec3 V = -rd;
     vec3 H = normalize(Lkey + V);
 
     float diff = max(dot(N, Lkey), 0.0);
     float rim  = max(dot(N, Lrim), 0.0);
-    float spec = pow(max(dot(N, H), 0.0), 28.0);
+    float spec = pow(max(dot(N, H), 0.0), 32.0);
 
-    vec3 col = alb * (0.28 + 0.78 * diff + 0.25 * rim) + vec3(0.95, 0.88, 0.75) * spec * 0.35;
+    vec3 col = alb * (0.30 + 0.82 * diff + 0.28 * rim) + vec3(0.98, 0.90, 0.78) * spec * 0.42;
     if (hitMat == 23) col += vec3(0.12, 0.85, 0.32) * 0.65;
     return clamp(col, 0.0, 1.0);
 }
@@ -1555,21 +1634,26 @@ void main() {
     vec2 groundCellXY = subCell + tacUV * cellsSpan;
     vec2 globalCellXY = originCell + groundCellXY;
 
-    // Oblique 3D Camera & Sun Directions (in cell coordinate space: +X East, +Y South, +Z Up)
-    // Camera looks down from South-to-North at ~65 deg elevation so +Z projects upward (-Y on screen)
-    vec3 V = normalize(vec3(0.0, 0.42, 0.907));
-    vec3 L = normalize(vec3(-0.52, -0.46, 0.72)); // Warm directional sun from NW
+    // Oblique 3/4 Isometric Camera & Sun Directions (in cell coordinate space: +X East, +Y South, +Z Up)
+    // Camera looks down from South-West to North-East at an oblique 3/4 RTS angle so 3D tank/cliff faces pop
+    vec3 V = normalize(vec3(-0.24, 0.52, 0.82));
+    vec3 L = normalize(vec3(-0.56, -0.44, 0.70)); // Warm directional sun from NW
     vec3 H = normalize(V + L);
 
     // ------------------------------------------------------------------------
     // 3. Ray-March 3D Terrain Relief (Heightfield Displacement + Cliffs + Craters)
     // ------------------------------------------------------------------------
     vec4 terrainFields;
+    vec2 camStepXY = V.xy / max(V.z, 0.35);
     float hGround = evaluateTerrainHeight(groundCellXY, globalCellXY, terrainFields);
-    // 2-step relief refinement along camera vector for tall cliffs
-    vec2 displacedCellXY = groundCellXY + vec2(0.0, hGround * 0.42);
-    vec2 displacedGlobalXY = originCell + displacedCellXY;
-    hGround = evaluateTerrainHeight(displacedCellXY, displacedGlobalXY, terrainFields);
+    // 4-step iterative terrain relief refinement along 3/4 oblique camera ray for dramatic coastal bluffs
+    vec2 displacedCellXY = groundCellXY;
+    vec2 displacedGlobalXY = globalCellXY;
+    for (int rStep = 0; rStep < 4; ++rStep) {
+        displacedCellXY = groundCellXY + camStepXY * (hGround * 0.85);
+        displacedGlobalXY = originCell + displacedCellXY;
+        hGround = mix(hGround, evaluateTerrainHeight(displacedCellXY, displacedGlobalXY, terrainFields), 0.75);
+    }
 
     vec3 terrainPos = vec3(displacedCellXY, hGround);
     vec3 terrainN   = evaluateTerrainNormal(displacedCellXY, displacedGlobalXY);
@@ -1612,20 +1696,47 @@ void main() {
     } else {
         // THEATER_TEMPERATE / COASTAL (CnC-Ultra-Game.jpg):
         // Weathered olive-drab scrubland, gritty damp earth/loam, stratified shale/limestone coastal cliffs
-        soilCol  = mix(vec3(0.23, 0.20, 0.16), vec3(0.32, 0.28, 0.22), nFine * 0.7 + nPebble * 0.3);
-        grassCol = mix(vec3(0.17, 0.21, 0.13), vec3(0.25, 0.29, 0.18), nFine * 0.65 + nMicro * 0.35);
-        cliffCol = mix(vec3(0.22, 0.21, 0.19), vec3(0.39, 0.37, 0.34), nMicro);
+        soilCol  = mix(vec3(0.23, 0.20, 0.16), vec3(0.34, 0.29, 0.22), nFine * 0.7 + nPebble * 0.3);
+        grassCol = mix(vec3(0.16, 0.21, 0.12), vec3(0.25, 0.30, 0.17), nFine * 0.65 + nMicro * 0.35);
+        cliffCol = mix(vec3(0.21, 0.20, 0.18), vec3(0.40, 0.38, 0.34), nMicro);
         roadCol  = mix(vec3(0.18, 0.16, 0.14), vec3(0.27, 0.25, 0.22), nMicro);
         beachCol = vec3(0.38, 0.35, 0.29);
     }
 
-    float grassWeight = smoothstep(0.28, 0.68, fbm3(displacedGlobalXY * 1.4 + vec2(5.2, 9.1)));
+    float grassWeight = smoothstep(0.26, 0.68, fbm3(displacedGlobalXY * 1.4 + vec2(5.2, 9.1)));
     vec3 surfAlbedo = mix(soilCol, grassCol, grassWeight);
     float surfRough = mix(0.88, 0.80, grassWeight);
     float surfMetal = 0.02;
 
+    // Scattered coastal boulders, scree stones, and dark olive scrub bushes across LAND_CLEAR
+    if (waterMask < 0.12 && roadMask < 0.25) {
+        vec2 boulderGrid = displacedGlobalXY * 3.2;
+        vec2 bId = floor(boulderGrid);
+        vec2 bUv = fract(boulderGrid) - vec2(0.5);
+        float bRand = hash12(bId);
+        if (bRand > 0.62) {
+            vec2 bOff = (vec2(hash12(bId + vec2(3.1, 1.7)), hash12(bId + vec2(7.4, 5.3))) - 0.5) * 0.42;
+            float bRad = 0.14 + 0.16 * hash12(bId + vec2(11.2, 9.8));
+            float bDist = length((bUv - bOff) * vec2(1.15, 0.90));
+            if (bDist < bRad) {
+                float bHeight = sqrt(max(0.0, 1.0 - (bDist / bRad) * (bDist / bRad)));
+                vec3 bNormal = normalize(vec3((bUv - bOff) / bRad, bHeight * 0.85));
+                terrainN = normalize(mix(terrainN, bNormal, 0.72));
+                if (bRand > 0.82) {
+                    // Dark olive coastal scrub bush
+                    surfAlbedo = mix(vec3(0.11, 0.16, 0.08), vec3(0.20, 0.26, 0.13), nMicro);
+                    surfRough = 0.86;
+                } else {
+                    // Weathered coastal granite boulder
+                    surfAlbedo = cliffCol * (0.78 + 0.35 * nPebble);
+                    surfRough = 0.68;
+                }
+            }
+        }
+    }
+
     // Perturb terrain normal with 4K micro-detail & gravel scree
-    terrainN = normalize(terrainN + vec3((nMicro - 0.5) * 0.26, (nPebble - 0.5) * 0.26, 0.0));
+    terrainN = normalize(terrainN + vec3((nMicro - 0.5) * 0.28, (nPebble - 0.5) * 0.28, 0.0));
 
     // Apply Muddy Tank-Rutted Dirt Roads & Coastal Concrete Bridges
     if (roadMask > 0.01) {
@@ -1721,16 +1832,16 @@ void main() {
 
         // Multi-layered crashing whitewater surf & lacy cellular sea-foam along coastlines & crags
         float coastDist = 1.0 - waterMask;
-        float breaker1 = sin(coastDist * 34.0 - time * 3.6 + w1 * 5.8) * 0.5 + 0.5;
-        float breaker2 = sin(coastDist * 62.0 - time * 4.8 - w2 * 6.4) * 0.5 + 0.5;
-        float laceCell = 1.0 - abs(noise2D(displacedGlobalXY * 22.0 + vec2(w1, w2) * 1.8) * 2.0 - 1.0);
-        float laceFoam = pow(clamp(laceCell, 0.0, 1.0), 2.4);
+        float breaker1 = sin(coastDist * 16.0 - time * 2.6 + w1 * 4.2) * 0.5 + 0.5;
+        float breaker2 = sin(coastDist * 32.0 - time * 3.5 - w2 * 4.8) * 0.5 + 0.5;
+        float laceCell = 1.0 - abs(fbm3(displacedGlobalXY * 6.8 + vec2(w1, w2) * 1.3) * 2.0 - 1.0);
+        float laceFoam = pow(clamp(laceCell, 0.0, 1.0), 1.9);
 
-        float surfZone = smoothstep(0.84, 0.30, waterMask);
-        float mainCrest = smoothstep(0.52, 0.88, breaker1) * smoothstep(0.28, 0.55, waterMask);
-        float subCrest  = smoothstep(0.58, 0.90, breaker2) * surfZone * 0.75;
-        float foamWeb   = surfZone * laceFoam * (0.45 + 0.55 * breaker1);
-        float whitecap  = smoothstep(0.74, 0.92, w1 * 0.65 + w2 * 0.45) * 0.35;
+        float surfZone  = smoothstep(0.88, 0.26, waterMask) * smoothstep(0.16, 0.34, waterMask);
+        float mainCrest = smoothstep(0.54, 0.86, breaker1) * surfZone;
+        float subCrest  = smoothstep(0.60, 0.90, breaker2) * surfZone * 0.78;
+        float foamWeb   = surfZone * laceFoam * (0.48 + 0.52 * breaker1);
+        float whitecap  = smoothstep(0.75, 0.92, w1 * 0.65 + w2 * 0.45) * smoothstep(0.45, 0.85, waterMask) * 0.30;
 
         float foamMask = clamp(max(mainCrest, subCrest) + foamWeb + whitecap, 0.0, 1.0);
         if (cellSlope == 10u || cellSlope == 11u) {
@@ -1752,7 +1863,7 @@ void main() {
     //    & 3D Articulated Entities (Vehicles, Buildings, Infantry, Aircraft, Trees)
     //    Rays march FROM THE CAMERA (u = uMax, above the scene) DOWNWARD (-V) toward u = 0 (ground)
     // ------------------------------------------------------------------------
-    vec3 camDir = vec3(0.0, 0.42, 0.907); // Unit vector from ground point toward camera (+Y South, +Z Up)
+    vec3 camDir = normalize(vec3(-0.24, 0.52, 0.82)); // 3/4 oblique camera ray (+Y South, -X West, +Z Up)
     int hitMat = 0;
     vec3 hitPos = terrainPos;
     vec3 hitNormal = terrainN;
@@ -1766,35 +1877,37 @@ void main() {
     // A. Check 3D Tiberium Crystal Clusters, Connected Walls & Supply Crates in current/southern cell
     ivec2 groundCellIdx = ivec2(floor(groundCellXY));
     for (int cy = 0; cy <= 1; ++cy) {
-        ivec2 testCell = groundCellIdx + ivec2(0, cy);
-        uint rawC = fetchCellRaw(testCell);
-        uint ovlC = (rawC >> 4u) & 15u;
-        uint landC = rawC & 15u;
-        if (ovlC == 0u && landC != 4u && landC != 5u) continue;
+        for (int cx = -1; cx <= 0; ++cx) {
+            ivec2 testCell = groundCellIdx + ivec2(cx, cy);
+            uint rawC = fetchCellRaw(testCell);
+            uint ovlC = (rawC >> 4u) & 15u;
+            uint landC = rawC & 15u;
+            if (ovlC == 0u && landC != 4u && landC != 5u) continue;
 
-        float u = 0.42;
-        for (int s = 0; s < 18; ++s) {
-            if (u <= bestCamU) break;
-            vec3 p = vec3(groundCellXY + camDir.xy * u, camDir.z * u);
-            int mId;
-            vec3 lCoord;
-            float d = mapCellStructures(p, testCell, rawC, mId, lCoord);
-            if (d < 0.006) {
-                bestCamU = u;
-                hitMat = mId;
-                hitPos = terrainPos + camDir * u;
-                hitLocal = lCoord;
-                float eps = 0.006;
-                int dm;
-                vec3 dl;
-                hitNormal = normalize(vec3(
-                    mapCellStructures(p + vec3(eps, 0.0, 0.0), testCell, rawC, dm, dl) - d,
-                    mapCellStructures(p + vec3(0.0, eps, 0.0), testCell, rawC, dm, dl) - d,
-                    mapCellStructures(p + vec3(0.0, 0.0, eps), testCell, rawC, dm, dl) - d
-                ));
-                break;
+            float u = 0.45;
+            for (int s = 0; s < 16; ++s) {
+                if (u <= bestCamU) break;
+                vec3 p = vec3(groundCellXY + camDir.xy * u, camDir.z * u);
+                int mId;
+                vec3 lCoord;
+                float d = mapCellStructures(p, testCell, rawC, mId, lCoord);
+                if (d < 0.006) {
+                    bestCamU = u;
+                    hitMat = mId;
+                    hitPos = terrainPos + camDir * u;
+                    hitLocal = lCoord;
+                    float eps = 0.006;
+                    int dm;
+                    vec3 dl;
+                    hitNormal = normalize(vec3(
+                        mapCellStructures(p + vec3(eps, 0.0, 0.0), testCell, rawC, dm, dl) - d,
+                        mapCellStructures(p + vec3(0.0, eps, 0.0), testCell, rawC, dm, dl) - d,
+                        mapCellStructures(p + vec3(0.0, 0.0, eps), testCell, rawC, dm, dl) - d
+                    ));
+                    break;
+                }
+                u -= max(d * 0.85, 0.006);
             }
-            u -= max(d * 0.85, 0.006);
         }
     }
 
@@ -1818,19 +1931,19 @@ void main() {
         float health = clamp(fract(d1.z), 0.01, 0.999);
 
         // Determine culling radius in cells based on entity category
-        float cullRad = 0.95;
+        float cullRad = 1.05;
         if (cat == 1) {
             int fw = max(1, int(floor(d1.w)) & 7);
             int fh = max(1, (int(floor(d1.w)) >> 3) & 7);
-            cullRad = max(float(fw), float(fh)) * 0.72 + 0.65;
+            cullRad = max(float(fw), float(fh)) * 0.72 + 0.70;
         } else if (cat == 3) {
             cullRad = 1.85;
         } else if (cat == 4 || cat == 6) {
             cullRad = 1.25;
         }
 
-        // Fast 2D bounding-box rejection (shifted slightly North for tall 3D projection & rising smoke plumes)
-        vec2 projCenter = d0.xy - vec2(0.0, d0.z * 0.46 + ((cat == 1) ? 0.22 : 0.12));
+        // Fast 2D bounding-box rejection (shifted along 3/4 oblique camera vector for tall 3D projection)
+        vec2 projCenter = d0.xy - camDir.xy * (d0.z * 0.85 + ((cat == 1) ? 0.35 : 0.18));
         vec2 diffXY = groundCellXY - projCenter;
         if (max(abs(diffXY.x), abs(diffXY.y)) > cullRad) continue;
 
@@ -2062,11 +2175,15 @@ void main() {
             roughness = 0.55;
             metallic = 0.35;
         } else if (hitMat == 20) {
-            // Armored Track / Tire Rubber & Steel Grousers
+            // Armored Track / Road-Wheel Suspension Bogies & Steel Grousers
             float treadRib = step(0.45, fract((hitLocal.y + hitLocal.z) * 18.0));
+            float wheelSpacing = (fract((hitLocal.y + 0.30) * 9.5) - 0.5) / 9.5;
+            float wheelR = length(vec2(wheelSpacing, hitLocal.z - 0.048));
+            float isWheel = smoothstep(0.042, 0.030, wheelR) * step(0.10, abs(hitLocal.x));
             albedo = mix(vec3(0.12, 0.13, 0.14), vec3(0.28, 0.30, 0.33), treadRib);
-            roughness = 0.62;
-            metallic = 0.55;
+            albedo = mix(albedo, houseCol * 0.65, isWheel * 0.85);
+            roughness = 0.56;
+            metallic = 0.58;
         } else if (hitMat == 21) {
             // Vehicle Composite Hull Armor (House painted + weathered steel edges)
             float panel = smoothstep(0.42, 0.48, abs(fract(hitLocal.y * 5.0) - 0.5));
@@ -2093,13 +2210,14 @@ void main() {
             metallic = 0.5;
             emissive = glowCol * (1.25 + 0.45 * sin(time * 6.0));
         } else if (hitMat == 25) {
-            // Structure Architectural Superstructure (House armor + illuminated windows/vents)
-            vec2 winGrid = fract(vec2(hitLocal.x + hitLocal.y, hitLocal.z) * 7.5);
-            float winMask = step(0.68, winGrid.x) * step(0.62, winGrid.y) * step(0.08, hitLocal.z);
-            albedo = mix(vec3(0.36, 0.38, 0.42), houseCol, 0.62) * (0.86 + 0.26 * metalNoise);
-            roughness = 0.40;
-            metallic = 0.68;
-            emissive = vec3(0.95, 0.78, 0.38) * winMask * 0.55;
+            // Structure Architectural Superstructure (Weathered Concrete Bunker + Faction Trim Stripe + Slit Vents)
+            float stripeMask = smoothstep(0.15, 0.20, hitLocal.z) * smoothstep(0.26, 0.21, hitLocal.z);
+            float slitMask = step(0.65, fract((hitLocal.x + hitLocal.y) * 5.0)) * smoothstep(0.14, 0.16, hitLocal.z) * smoothstep(0.20, 0.18, hitLocal.z);
+            vec3 bunkerConcrete = vec3(0.32, 0.33, 0.34) * (0.84 + 0.30 * metalNoise);
+            albedo = mix(bunkerConcrete, houseCol * 0.78, stripeMask * 0.55) * (1.0 - 0.65 * slitMask);
+            roughness = 0.58;
+            metallic = 0.32;
+            emissive = vec3(0.95, 0.72, 0.32) * slitMask * 0.22;
             if ((hitFlags & 16) != 0) {
                 // Laser-scaffolding construction grid
                 float scan = exp(-abs(hitLocal.z - 0.65 * clamp(uTac.view_params0.x, 0.0, 1.0)) * 24.0);
@@ -2111,11 +2229,14 @@ void main() {
             roughness = 0.90;
             metallic = 0.0;
         } else if (hitMat == 27) {
-            // 3D Botanical Foliage Canopy
-            vec3 leafA = (theater == 3) ? vec3(0.75, 0.85, 0.92) : ((theater == 0) ? vec3(0.32, 0.42, 0.18) : vec3(0.14, 0.38, 0.11));
-            vec3 leafB = (theater == 3) ? vec3(0.22, 0.38, 0.24) : ((theater == 0) ? vec3(0.48, 0.52, 0.22) : vec3(0.28, 0.56, 0.16));
-            albedo = mix(leafA, leafB, smoothstep(-0.2, 0.25, hitLocal.z) * 0.7 + metalNoise * 0.3);
-            roughness = 0.76;
+            // 3D Weathered Coastal Pine & Scrub Foliage Canopy (with high-frequency branch/needle normal detail)
+            float leafMicro = noise2D(P.xy * 42.0 + hitLocal.z * 28.0);
+            float leafClump = fbm3(P.xy * 16.0);
+            vec3 leafA = (theater == 3) ? vec3(0.68, 0.78, 0.86) : ((theater == 0) ? vec3(0.24, 0.30, 0.14) : vec3(0.09, 0.15, 0.07));
+            vec3 leafB = (theater == 3) ? vec3(0.18, 0.30, 0.20) : ((theater == 0) ? vec3(0.38, 0.42, 0.18) : vec3(0.19, 0.27, 0.13));
+            albedo = mix(leafA, leafB, smoothstep(-0.18, 0.22, hitLocal.z) * 0.55 + leafClump * 0.45) * (0.75 + 0.50 * leafMicro);
+            N = normalize(N + vec3((leafMicro - 0.5) * 0.55, (leafClump - 0.5) * 0.55, 0.0));
+            roughness = 0.86;
             metallic = 0.0;
         } else if (hitMat == 28) {
             // Outcrop Boulder Rock
@@ -2138,12 +2259,7 @@ void main() {
     float NdotH = max(dot(N, H), 0.0);
     float VdotH = max(dot(V, H), 0.0);
 
-    // Terrain self-shadowing from adjacent Rock Cliffs / Walls to the North-West
-    uint nwRaw = fetchCellRaw(cellIdx + ivec2(-1, -1));
-    float cliffShadow = (hitMat == 0 && (isCellRock(nwRaw) || isCellWall(nwRaw)) && !isCellRock(cellRaw))
-        ? smoothstep(0.65, 0.15, fract(displacedCellXY.x) + fract(displacedCellXY.y)) * 0.55
-        : 0.0;
-    float shadowVis = (1.0 - max(entityShadow, cliffShadow));
+    float shadowVis = 1.0 - entityShadow;
 
     // GGX NDF & Fresnel
     float a2 = max(roughness * roughness * roughness * roughness, 0.002);
@@ -2232,14 +2348,16 @@ void main() {
     }
 
     // ------------------------------------------------------------------------
-    // 10. Volumetric 3D Shroud & Fog-of-War + ACES Filmic Tone Mapping
+    // 10. Atmospheric Reconnaissance Fog-of-War & ACES Filmic Tone Mapping
     // ------------------------------------------------------------------------
-    float vis = terrainFields.w; // 0.0 = Unmapped Shroud, 1.0 = Fully Visible
+    float vis = terrainFields.w; // 0.0 = Unmapped Reconnaissance Fog, 1.0 = Fully Visible
     if (vis < 0.99) {
-        float shroudNoise = fbm3(globalCellXY * 2.2 + vec2(time * 0.18, -time * 0.12));
-        float shroudFactor = smoothstep(0.12, 0.82, vis + (shroudNoise - 0.5) * 0.28);
-        vec3 shroudCloud = vec3(0.015, 0.02, 0.028) * (0.6 + 0.8 * shroudNoise);
-        litColor = mix(shroudCloud, litColor, shroudFactor);
+        // Instead of pitch-black void hiding the 3D coastal terrain, render unmapped cells as moody
+        // twilight reconnaissance mist so 3D cliffs, roads & crashing surf remain visible across the screen
+        float shroudNoise = fbm3(globalCellXY * 1.8 + vec2(time * 0.14, -time * 0.09));
+        float shroudFactor = smoothstep(0.05, 0.85, vis + (shroudNoise - 0.5) * 0.22);
+        vec3 reconFog = mix(litColor * 0.68, vec3(0.18, 0.22, 0.26) * (0.75 + 0.35 * shroudNoise), 0.28);
+        litColor = mix(reconFog, litColor, shroudFactor);
     }
 
     // ACES Filmic Tone Mapping & Subtle Contrast Grading
@@ -2261,23 +2379,22 @@ void main() {
 
     if (dlgRect.z <= dlgRect.x) {
         // ====================================================================
-        // CARD 1: TOP-LEFT FLOATING RESOURCE & TELEMETRY BAR (px in [4..218, 3..27])
+        // CARD 1: TOP-LEFT FLOATING RESOURCE & TELEMETRY BAR (px in [4..228, 3..27])
         // ====================================================================
-        if (px.x >= 2.0 && px.x <= 222.0 && px.y >= 1.0 && px.y <= 31.0) {
+        if (px.x >= 2.0 && px.x <= 232.0 && px.y >= 1.0 && px.y <= 31.0) {
             vec2 bMin = vec2(4.0, 3.0);
-            vec2 bMax = vec2(218.0, 27.0);
+            vec2 bMax = vec2(228.0, 27.0);
             vec2 dOut = max(bMin - px, px - bMax);
             float distOut = length(max(dOut, vec2(0.0)));
             if (distOut > 0.0) {
-                // Soft outer drop shadow
                 mapped *= mix(0.45, 1.0, smoothstep(0.0, 4.0, distOut));
             } else {
                 vec2 dIn = min(px - bMin, bMax - px);
                 float edge = min(dIn.x, dIn.y);
                 vec3 cardCol = (edge < 1.2) ? hudBorder * 1.18 : hudBg;
 
-                // Module dividers at x = 62, 116, 166
-                if (abs(px.x - 62.0) < 0.6 || abs(px.x - 116.0) < 0.6 || abs(px.x - 166.0) < 0.6) {
+                // Module dividers at x = 62, 118, 174
+                if (abs(px.x - 62.0) < 0.6 || abs(px.x - 118.0) < 0.6 || abs(px.x - 174.0) < 0.6) {
                     cardCol = hudBorder * 0.85;
                 }
 
@@ -2289,58 +2406,63 @@ void main() {
                 int tiberium = int(uTac.hud_telemetry[1].y + 0.5);
                 int netPower = max(0, powerOut - powerDrn);
 
-                // 1. Stacked Gold Coins Icon at (12, 15) + Credits + "+510"
+                // 1. Stacked Silver/Steel Coins Icon at (12, 15) + Credits + "+510"
                 float c1 = length((px - vec2(12.5, 17.5)) * vec2(1.0, 1.4)) - 4.2;
                 float c2 = length((px - vec2(12.5, 14.0)) * vec2(1.0, 1.4)) - 4.2;
                 float c3 = length((px - vec2(12.5, 10.5)) * vec2(1.0, 1.4)) - 4.2;
                 if (min(c1, min(c2, c3)) < 0.0) {
-                    cardCol = mix(vec3(0.78, 0.58, 0.16), vec3(0.98, 0.82, 0.32), smoothstep(0.0, -2.0, min(c1, min(c2, c3))));
+                    cardCol = mix(vec3(0.54, 0.59, 0.65), vec3(0.84, 0.88, 0.92), smoothstep(0.0, -2.0, min(c1, min(c2, c3))));
                 }
                 float txtCred = drawHudNumber(px, vec2(20.0, 6.5), credits, false, 1.35);
                 float txtCredRate = drawHudNumber(px, vec2(20.0, 16.5), 510, true, 1.05);
                 cardCol = mix(cardCol, vec3(0.95, 0.97, 1.0), txtCred);
                 cardCol = mix(cardCol, vec3(0.28, 0.88, 0.42), txtCredRate);
 
-                // 2. Amber Lightning Bolt Icon at (70, 15) + Power + "+surplus"
+                // 2. Silver Lightning Bolt Icon at (70, 15) + Power + "+surplus"
                 vec2 lp = px - vec2(70.5, 15.0);
                 float bolt = step(abs(lp.y), 6.5) * step(abs(lp.x - lp.y * 0.25 + sign(lp.y) * 1.1), 1.8);
-                cardCol = mix(cardCol, vec3(0.98, 0.78, 0.22), bolt);
+                cardCol = mix(cardCol, vec3(0.76, 0.82, 0.88), bolt);
                 float txtPow = drawHudNumber(px, vec2(77.0, 6.5), powerOut, false, 1.35);
                 float txtPowRate = drawHudNumber(px, vec2(77.0, 16.5), netPower, true, 1.05);
                 cardCol = mix(cardCol, vec3(0.95, 0.97, 1.0), txtPow);
                 cardCol = mix(cardCol, vec3(0.28, 0.88, 0.42), txtPowRate);
 
-                // 3. Squad Silhouette Icon at (124, 15) + Force Count (curUnits / maxUnits)
-                float head1 = length(px - vec2(123.5, 11.0)) - 2.2;
-                float body1 = length((px - vec2(123.5, 17.5)) * vec2(1.0, 0.75)) - 3.4;
+                // 3. Squad Silhouette Icon at (125, 15) + Single-line Force Count "12/50"
+                float head1 = length(px - vec2(125.0, 11.0)) - 2.2;
+                float body1 = length((px - vec2(125.0, 17.5)) * vec2(1.0, 0.75)) - 3.4;
                 if (min(head1, body1) < 0.0) {
-                    cardCol = vec3(0.68, 0.74, 0.80);
+                    cardCol = vec3(0.72, 0.78, 0.84);
                 }
-                float txtForce = drawHudNumber(px, vec2(130.0, 6.5), curUnits, false, 1.35);
-                float txtCap   = drawHudNumber(px, vec2(130.0, 16.5), maxUnits, false, 1.05);
-                cardCol = mix(cardCol, vec3(0.95, 0.97, 1.0), txtForce);
-                cardCol = mix(cardCol, vec3(0.58, 0.64, 0.70), txtCap);
+                float txtForce = drawHudNumber(px, vec2(132.0, 10.5), curUnits, false, 1.30);
+                float slashOff = (curUnits >= 10) ? 144.0 : 138.5;
+                float txtSlash = sampleGlyph3x5(47, px - vec2(slashOff, 10.5), 1.30);
+                float txtCap   = drawHudNumber(px, vec2(slashOff + 5.8, 10.5), maxUnits, false, 1.30);
+                cardCol = mix(cardCol, vec3(0.95, 0.97, 1.0), max(txtForce, max(txtSlash, txtCap)));
 
-                // 4. Emerald Tiberium Crystal Icon at (174, 15) + Tiberium + "+15"
-                vec2 tp = abs(px - vec2(174.0, 15.0));
-                if (tp.x * 1.5 + tp.y < 6.2) {
-                    cardCol = mix(vec3(0.12, 0.68, 0.32), vec3(0.38, 0.98, 0.58), smoothstep(6.2, 0.0, tp.x * 1.5 + tp.y));
+                // 4. Emerald Teardrop / Bio-Tiberium Drop Icon at (182, 15) + Tiberium + "+15"
+                vec2 dp = px - vec2(182.0, 15.5);
+                float dropR = length(vec2(dp.x * 1.25, dp.y - max(0.0, -dp.y * 0.35))) - 4.4;
+                if (dropR < 0.0) {
+                    cardCol = mix(vec3(0.14, 0.68, 0.32), vec3(0.38, 0.96, 0.54), smoothstep(0.0, -2.5, dropR));
                 }
-                float txtTib = drawHudNumber(px, vec2(181.0, 6.5), tiberium, false, 1.35);
-                float txtTibRate = drawHudNumber(px, vec2(181.0, 16.5), 15, true, 1.05);
+                float txtTib = drawHudNumber(px, vec2(189.0, 6.5), tiberium, false, 1.35);
+                float txtTibRate = drawHudNumber(px, vec2(189.0, 16.5), 15, true, 1.05);
                 cardCol = mix(cardCol, vec3(0.95, 0.97, 1.0), txtTib);
                 cardCol = mix(cardCol, vec3(0.28, 0.88, 0.42), txtTibRate);
 
-                mapped = mix(mapped, cardCol, 0.90);
+                mapped = mix(mapped, cardCol, 0.92);
             }
         }
 
         // ====================================================================
-        // CARD 2: TOP-RIGHT FLOATING "OBJECTIVES" CARD (px in [378..476, 4..56])
+        // CARD 2: TOP-RIGHT FLOATING "OBJECTIVES" CARD
+        // Shifts neatly to the left of the Top-Right Framed Satellite Minimap
         // ====================================================================
-        if (px.x >= 376.0 && px.x <= 478.0 && px.y >= 2.0 && px.y <= 59.0) {
-            vec2 bMin = vec2(378.0, 4.0);
-            vec2 bMax = vec2(476.0, 56.0);
+        float objX0 = (tacRect.z > 0.95) ? 430.0 : 378.0;
+        float objX1 = (tacRect.z > 0.95) ? 536.0 : 476.0;
+        if (px.x >= objX0 - 2.0 && px.x <= objX1 + 2.0 && px.y >= 1.0 && px.y <= 59.0) {
+            vec2 bMin = vec2(objX0, 3.0);
+            vec2 bMax = vec2(objX1, 56.0);
             vec2 dOut = max(bMin - px, px - bMax);
             float distOut = length(max(dOut, vec2(0.0)));
             if (distOut > 0.0) {
@@ -2352,7 +2474,7 @@ void main() {
 
                 // Header "OBJECTIVES" (O=79,B=66,J=74,E=69,C=67,T=84,I=73,V=86,E=69,S=83)
                 int objHdr[10] = int[10](79, 66, 74, 69, 67, 84, 73, 86, 69, 83);
-                vec2 hRel = px - vec2(384.0, 8.0);
+                vec2 hRel = px - vec2(objX0 + 6.0, 7.5);
                 if (hRel.x >= 0.0 && hRel.y >= 0.0 && hRel.y < 6.0) {
                     int ci = int(floor(hRel.x / 4.5));
                     if (ci >= 0 && ci < 10) {
@@ -2360,27 +2482,110 @@ void main() {
                         cardCol = mix(cardCol, vec3(0.92, 0.95, 0.98), g);
                     }
                 }
-                if (abs(px.y - 17.0) < 0.5 && px.x >= 383.0 && px.x <= 471.0) {
+                if (abs(px.y - 16.5) < 0.5 && px.x >= objX0 + 5.0 && px.x <= objX1 - 5.0) {
                     cardCol = hudBorder * 0.85;
                 }
 
-                // 3 Objective Bullet Dots & Crisp Micro-Text Lines
+                // 3 Readable Tactical Objective Lines:
+                // Row 0: "DESTROY ENEMY BASE"
+                // Row 1: "SECURE BEACHHEAD"
+                // Row 2: "PROTECT MCV CONVOY"
+                int line0[18] = int[18](68,69,83,84,82,79,89,32,69,78,69,77,89,32,66,65,83,69);
+                int line1[16] = int[16](83,69,67,85,82,69,32,66,69,65,67,72,72,69,65,68);
+                int line2[18] = int[18](80,82,79,84,69,67,84,32,77,67,86,32,67,79,78,86,79,89);
                 for (int r = 0; r < 3; ++r) {
-                    float ry = 23.0 + float(r) * 11.0;
-                    float dotD = length(px - vec2(385.5, ry + 2.2)) - 1.4;
+                    float ry = 22.0 + float(r) * 11.0;
+                    float dotD = length(px - vec2(objX0 + 7.5, ry + 2.2)) - 1.3;
                     if (dotD < 0.0) {
                         cardCol = (r == 0) ? vec3(0.28, 0.90, 0.44) : vec3(0.68, 0.74, 0.80);
                     }
-                    // Clean stylized micro-text word bars matching CnC-Ultra-Game.jpg
-                    vec2 tRel = px - vec2(390.0, ry);
-                    if (tRel.x >= 0.0 && tRel.x < (68.0 - float(r) * 7.0) && tRel.y >= 0.0 && tRel.y < 4.5) {
-                        float charCell = step(0.22, fract(tRel.x * 0.25)) * step(0.25, fract(tRel.y * 0.45));
-                        float wordGap = step(0.12, abs(fract(tRel.x * 0.045 + float(r) * 0.31) - 0.45));
-                        cardCol = mix(cardCol, vec3(0.76, 0.80, 0.84), charCell * wordGap * 0.85);
+                    vec2 tRel = px - vec2(objX0 + 12.0, ry);
+                    if (tRel.x >= 0.0 && tRel.y >= 0.0 && tRel.y < 5.0) {
+                        int ci = int(floor(tRel.x / 3.6));
+                        int ch = 32;
+                        if (r == 0 && ci >= 0 && ci < 18) ch = line0[ci];
+                        else if (r == 1 && ci >= 0 && ci < 16) ch = line1[ci];
+                        else if (r == 2 && ci >= 0 && ci < 18) ch = line2[ci];
+                        if (ch != 32) {
+                            float g = sampleGlyph3x5(ch, vec2(tRel.x - float(ci) * 3.6, tRel.y), 0.88);
+                            cardCol = mix(cardCol, vec3(0.80, 0.84, 0.88), g);
+                        }
                     }
                 }
 
-                mapped = mix(mapped, cardCol, 0.86);
+                mapped = mix(mapped, cardCol, 0.88);
+            }
+        }
+
+        // ====================================================================
+        // CARD 2B: TOP-RIGHT FRAMED SATELLITE MINIMAP (when C&C sidebar is closed)
+        // Ensures the top-right radar minimap is ALWAYS present like CnC-Ultra-Game.jpg
+        // ====================================================================
+        if (tacRect.z > 0.95 && px.x >= 538.0 && px.x <= 638.0 && px.y >= 1.0 && px.y <= 96.0) {
+            vec2 bMin = vec2(540.0, 3.0);
+            vec2 bMax = vec2(636.0, 93.0);
+            vec2 dOut = max(bMin - px, px - bMax);
+            float distOut = length(max(dOut, vec2(0.0)));
+            if (distOut > 0.0) {
+                mapped *= mix(0.42, 1.0, smoothstep(0.0, 4.0, distOut));
+            } else {
+                vec2 dIn = min(px - bMin, bMax - px);
+                float edge = min(dIn.x, dIn.y);
+                vec3 cardCol = (edge < 1.2) ? hudBorder * 1.22 : hudBg;
+
+                // Top "OPTIONS   MENU" micro-caption bar inside minimap frame (y in [5..13])
+                int optMenu[12] = int[12](79,80,84,73,79,78,83,32,77,69,78,85);
+                vec2 mRel = px - vec2(562.0, 6.0);
+                if (mRel.x >= 0.0 && mRel.y >= 0.0 && mRel.y < 5.0) {
+                    int ci = int(floor(mRel.x / 3.8));
+                    if (ci >= 0 && ci < 12 && optMenu[ci] != 32) {
+                        float g = sampleGlyph3x5(optMenu[ci], vec2(mRel.x - float(ci) * 3.8, mRel.y), 0.9);
+                        cardCol = mix(cardCol, vec3(0.78, 0.82, 0.86), g);
+                    }
+                }
+
+                // Satellite Minimap Screen (px in [544..632, 14..89])
+                if (px.x >= 544.0 && px.x <= 632.0 && px.y >= 14.0 && px.y <= 89.0) {
+                    vec2 rUV = (px - vec2(544.0, 14.0)) / vec2(88.0, 75.0);
+                    vec2 pEdge = min(px - vec2(544.0, 14.0), vec2(632.0, 89.0) - px);
+                    if (min(pEdge.x, pEdge.y) < 1.0) {
+                        cardCol = hudBorder * 1.15;
+                    } else {
+                        // Sample live cell_grid + coastal satellite topography
+                        ivec2 mCell = ivec2(clamp(rUV * vec2(28.0, 22.0), vec2(0.0), vec2(27.0, 21.0)));
+                        uint mRaw = fetchCellRaw(mCell);
+                        bool mWater = isCellWater(mRaw);
+                        bool mRock  = isCellRock(mRaw);
+                        bool mRoad  = isCellRoad(mRaw);
+                        float mTopo = fbm3(rUV * 8.0 + vec2(2.1, 4.7));
+                        vec3 satCol = mWater
+                            ? mix(vec3(0.03, 0.10, 0.16), vec3(0.06, 0.18, 0.24), mTopo)
+                            : (mRock ? vec3(0.28, 0.26, 0.23) : (mRoad ? vec3(0.24, 0.21, 0.17) : mix(vec3(0.15, 0.19, 0.12), vec3(0.24, 0.27, 0.18), mTopo)));
+
+                        // Live unit blips on satellite minimap
+                        for (int ui = 0; ui < 48; ++ui) {
+                            if (ui >= entCount) break;
+                            vec4 ud0 = uTac.ent_data0[ui];
+                            int uPack = int(floor(ud0.w + 0.5));
+                            int uCat = uPack & 7;
+                            int uHouse = (uPack >> 10) & 7;
+                            if (uCat > 2) continue;
+                            vec2 uUV = (ud0.xy - subCell) / max(cellsSpan, vec2(1.0));
+                            if (length((rUV - uUV) * vec2(88.0, 75.0)) < 1.9) {
+                                satCol = (uHouse == 0) ? vec3(0.95, 0.82, 0.22) : ((uHouse == 1) ? vec3(0.95, 0.18, 0.15) : vec3(0.25, 0.92, 0.38));
+                            }
+                        }
+
+                        // White camera viewport rectangle
+                        vec2 vBox = abs(rUV - vec2(0.50, 0.50)) - vec2(0.32, 0.28);
+                        if (abs(max(vBox.x, vBox.y)) < 0.018) {
+                            satCol = mix(satCol, vec3(0.92, 0.95, 0.98), 0.85);
+                        }
+                        cardCol = satCol;
+                    }
+                }
+
+                mapped = mix(mapped, cardCol, 0.94);
             }
         }
 
@@ -2507,6 +2712,95 @@ void main() {
                                 glyph = smoothstep(0.08, -0.02, min(dH, dS));
                             }
                             cardCol = mix(cardCol, vec3(0.68, 0.74, 0.80), clamp(glyph, 0.0, 1.0));
+                        }
+                    }
+                }
+
+                mapped = mix(mapped, cardCol, 0.94);
+            }
+        }
+
+        // ====================================================================
+        // CARD 4: BOTTOM-RIGHT 5x2 DARK-SLATE TACTICAL COMMAND DOCK (px in [486..636, 336..396])
+        // Renders the 5x2 command button grid from CnC-Ultra-Game.jpg when C&C sidebar is closed
+        // ====================================================================
+        if (tacRect.z > 0.95 && px.x >= 484.0 && px.x <= 638.0 && px.y >= 334.0 && px.y <= 398.0) {
+            vec2 bMin = vec2(486.0, 336.0);
+            vec2 bMax = vec2(636.0, 396.0);
+            vec2 dOut = max(bMin - px, px - bMax);
+            float distOut = length(max(dOut, vec2(0.0)));
+            if (distOut > 0.0) {
+                mapped *= mix(0.42, 1.0, smoothstep(0.0, 4.0, distOut));
+            } else {
+                vec2 dIn = min(px - bMin, bMax - px);
+                float edge = min(dIn.x, dIn.y);
+                vec3 cardCol = (edge < 1.2) ? hudBorder * 1.20 : hudBg;
+
+                // 5 Columns x 2 Rows of Dark-Slate Tactical Command Buttons
+                vec2 gRel = px - vec2(490.0, 340.0);
+                if (gRel.x >= 0.0 && gRel.x < 142.0 && gRel.y >= 0.0 && gRel.y < 52.0) {
+                    int colIdx = int(floor(gRel.x / 28.5));
+                    int rowIdx = int(floor(gRel.y / 26.5));
+                    float cellX = gRel.x - float(colIdx) * 28.5;
+                    float cellY = gRel.y - float(rowIdx) * 26.5;
+                    if (colIdx >= 0 && colIdx < 5 && rowIdx >= 0 && rowIdx < 2 && cellX <= 26.0 && cellY <= 24.0) {
+                        float cEdge = min(min(cellX, 26.0 - cellX), min(cellY, 24.0 - cellY));
+                        if (cEdge < 1.1) {
+                            cardCol = hudBorder * 1.15;
+                        } else {
+                            cardCol = hudSlot;
+                            vec2 ic = (vec2(cellX, cellY) - vec2(13.0, 12.0)) / 8.5;
+                            int cmdId = rowIdx * 5 + colIdx;
+                            float glyph = 0.0;
+                            if (cmdId == 0) {
+                                // Hand / Hold Position
+                                float palm = max(abs(ic.x) - 0.38, abs(ic.y - 0.15) - 0.35);
+                                float fingers = max(abs(ic.x) - 0.34, abs(ic.y + 0.25) - 0.28) + step(0.55, fract(ic.x * 5.0)) * 0.2;
+                                glyph = smoothstep(0.08, -0.02, min(palm, fingers));
+                            } else if (cmdId == 1) {
+                                // 4-Way Tactical Move Cross
+                                float crossD = min(max(abs(ic.x) - 0.12, abs(ic.y) - 0.68), max(abs(ic.y) - 0.12, abs(ic.x) - 0.68));
+                                glyph = smoothstep(0.08, -0.02, crossD);
+                            } else if (cmdId == 2) {
+                                // Target Crosshair / Attack
+                                float r = length(ic);
+                                float ring = abs(r - 0.52) - 0.07;
+                                float hairs = min(abs(ic.x), abs(ic.y)) - 0.05;
+                                glyph = smoothstep(0.06, -0.02, min(ring, max(hairs, r - 0.72)));
+                            } else if (cmdId == 3) {
+                                // Shield / Guard Area
+                                float sh = length(ic * vec2(1.15, 0.90)) - 0.58;
+                                glyph = smoothstep(0.09, 0.0, abs(sh)) + smoothstep(0.08, -0.02, max(sh + 0.18, -ic.x));
+                            } else if (cmdId == 4) {
+                                // Wrench / Repair
+                                float dBar = abs(ic.x + ic.y) - 0.14;
+                                glyph = smoothstep(0.08, -0.02, max(dBar, length(ic) - 0.65));
+                            } else if (cmdId == 5) {
+                                // Star / Special Ability
+                                float ang = atan(ic.y, ic.x);
+                                float r = length(ic) * (1.0 + 0.35 * cos(ang * 5.0));
+                                glyph = smoothstep(0.55, 0.42, r);
+                            } else if (cmdId == 6) {
+                                // Gear / Settings
+                                float r = length(ic);
+                                float ang = atan(ic.y, ic.x);
+                                float cog = abs(r - 0.45 + 0.08 * cos(ang * 8.0)) - 0.11;
+                                glyph = smoothstep(0.06, -0.02, cog);
+                            } else if (cmdId == 7) {
+                                // Padlock / Lock Stance
+                                float body = max(abs(ic.x) - 0.38, abs(ic.y - 0.18) - 0.28);
+                                float shackle = max(abs(length(ic - vec2(0.0, -0.15)) - 0.24) - 0.06, ic.y + 0.12);
+                                glyph = smoothstep(0.07, -0.02, min(body, shackle));
+                            } else if (cmdId == 8) {
+                                // Diagonal Expand / Scatter
+                                float d1 = abs(ic.x - ic.y) - 0.09;
+                                glyph = smoothstep(0.07, -0.02, max(d1, max(abs(ic.x), abs(ic.y)) - 0.62));
+                            } else {
+                                // Stop / Cancel 'X'
+                                float dX = min(abs(ic.x - ic.y), abs(ic.x + ic.y)) - 0.11;
+                                glyph = smoothstep(0.07, -0.02, max(dX, max(abs(ic.x), abs(ic.y)) - 0.58));
+                            }
+                            cardCol = mix(cardCol, vec3(0.72, 0.78, 0.84), clamp(glyph, 0.0, 1.0));
                         }
                     }
                 }

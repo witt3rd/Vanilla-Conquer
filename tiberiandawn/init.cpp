@@ -656,7 +656,7 @@ bool Init_Game(int, char*[])
     **	Play the introduction movies.
     */
     CCDebugString("C&C95 - About to play the intro movie\n");
-    if (!Special.IsFromInstall)
+    if (!Special.IsFromInstall && !std::getenv("CNC_AUTO_SCENARIO"))
         Play_Intro(true);
 
     /*
@@ -988,6 +988,19 @@ bool Select_Game(bool fade)
                 Theme.Fade_Out();
             } else
                 PlaybackGame = false;
+        }
+
+        if (const char* autoScen = std::getenv("CNC_AUTO_SCENARIO")) {
+            Scen.Scenario = std::max(1, std::atoi(autoScen));
+            BuildLevel = 10;
+            ScenPlayer = (std::getenv("CNC_AUTO_NOD") != nullptr) ? SCEN_PLAYER_NOD : SCEN_PLAYER_GDI;
+            ScenDir = SCEN_DIR_EAST;
+            Whom = (ScenPlayer == SCEN_PLAYER_NOD) ? HOUSE_BAD : HOUSE_GOOD;
+            Scen.CDifficulty = DIFF_NORMAL;
+            Scen.Difficulty = DIFF_NORMAL;
+            Scen.CarryOverMoney = 0;
+            GameToPlay = GAME_NORMAL;
+            process = false;
         }
 
         while (process) {

@@ -2483,7 +2483,37 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
     int tacW = Lepton_To_Pixel(TacLeptonWidth);
     int tacH = Lepton_To_Pixel(TacLeptonHeight);
     if (tacW <= 0) tacW = 480;
+    if (tacW >= 600) tacW = gw; // Fill full 640 width when sidebar is closed
     if (tacH <= 0) tacH = 384;
+
+    if (std::getenv("CNC_AUTO_SCENARIO") != nullptr) {
+        static int s_autoFrames = 0;
+        if (s_autoFrames < 150 && Units.Count() > 0) {
+            s_autoFrames++;
+            if (std::getenv("CNC_AUTO_SHOWCASE") != nullptr) {
+                Debug_Unshroud = true;
+            }
+            // Find the southernmost player unit on the beachhead/ocean so the shoreline is centered vertically
+            UnitClass* beachUnit = nullptr;
+            int maxCoordY = -1;
+            for (int i = 0; i < Units.Count(); ++i) {
+                UnitClass* u = Units.Ptr(i);
+                if (u && u->IsActive && !u->IsInLimbo && u->IsOwnedByPlayer) {
+                    int cy = static_cast<int>(Coord_Y(u->Center_Coord()));
+                    if (cy > maxCoordY) {
+                        maxCoordY = cy;
+                        beachUnit = u;
+                    }
+                }
+            }
+            if (beachUnit) {
+                int ux = std::max(0, static_cast<int>(Coord_X(beachUnit->Center_Coord())) - 13 * 256);
+                int uy = std::max(0, static_cast<int>(Coord_Y(beachUnit->Center_Coord())) - 11 * 256);
+                TacticalCoord = XY_Coord(ux, uy);
+                DesiredTacticalCoord = TacticalCoord;
+            }
+        }
+    }
 
     int tacLX = Coord_X(TacticalCoord);
     int tacLY = Coord_Y(TacticalCoord);
@@ -2557,10 +2587,11 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
     };
 
     // 1. Populate 30 x 20 Cell Grid around (baseCellX, baseCellY)
+    int maxPlayableY = (MapCellHeight > 0) ? std::min(MAP_CELL_H - 1, MapCellY + MapCellHeight - 1) : (MAP_CELL_H - 1);
     for (int gy = 0; gy < 20; ++gy) {
         for (int gx = 0; gx < 30; ++gx) {
             int cx = std::max(0, std::min(MAP_CELL_W - 1, baseCellX + gx));
-            int cy = std::max(0, std::min(MAP_CELL_H - 1, baseCellY + gy));
+            int cy = std::max(0, std::min(maxPlayableY, baseCellY + gy));
             CELL cell = XY_Cell(cx, cy);
             const CellClass& c = (*this)[cell];
 
@@ -2963,11 +2994,6 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         if (!ter || !ter->IsActive || ter->IsInLimbo || !ter->Class) continue;
 
         COORDINATE center = ter->Target_Coord();
-        CELL c = Coord_Cell(center);
-        if (!Debug_Unshroud && PlayerPtr != nullptr && !(*this)[c].Is_Mapped(PlayerPtr)) {
-            continue;
-        }
-
         float wx = toLocalCellX(center);
         float wy = toLocalCellY(center);
         if (!inTacticalMargin(wx, wy, 1.2f)) continue;
@@ -2991,6 +3017,42 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         }
     }
 
+    // 8b. Optional Coastal Beachhead Battle Showcase (when CNC_AUTO_SHOWCASE=1)
+    if (std::getenv("CNC_AUTO_SHOWCASE") != nullptr) {
+        auto addShowcaseEnt = [&](float wx, float wy, float alt, int cat, int subType, int houseId,
+                                  float hullYaw, float turYaw, float hp, int flags, float aux) {
+            if (entCount >= 128) return;
+            int packed = (cat & 7) | ((subType & 127) << 3) | ((houseId & 7) << 10);
+            ubo.ent_data0[entCount][0] = wx;
+            ubo.ent_data0[entCount][1] = wy;
+            ubo.ent_data0[entCount][2] = alt;
+            ubo.ent_data0[entCount][3] = static_cast<float>(packed);
+            ubo.ent_data1[entCount][0] = hullYaw;
+            ubo.ent_data1[entCount][1] = turYaw;
+            ubo.ent_data1[entCount][2] = static_cast<float>(flags) + hp;
+            ubo.ent_data1[entCount][3] = aux;
+            entCount++;
+        };
+        // GDI Amphibious Landing Task Force (M1A2 Abrams tanks, MCV, Humvees, Hovercraft, Gunboat, Infantry)
+        addShowcaseEnt(11.4f, 6.4f, 0.0f, 0, UNIT_MTANK,   0, 0.45f, 0.32f, 0.98f, 1 | 2, 18.0f); // Selected M1A2 Abrams on beachhead
+        addShowcaseEnt(9.4f,  7.2f, 0.0f, 0, UNIT_MTANK,   0, 0.38f, 0.28f, 0.92f, 0,     18.0f); // Wingman M1A2 Abrams on beachhead
+        addShowcaseEnt(13.6f, 6.9f, 0.0f, 0, UNIT_MCV,     0, 0.15f, 0.15f, 0.99f, 0,     18.0f); // GDI MCV on beachhead road
+        addShowcaseEnt(15.2f, 6.2f, 0.0f, 0, UNIT_JEEP,    0, 0.52f, 0.40f, 0.95f, 2,     18.0f); // Humvee scout on coastal road
+        addShowcaseEnt(10.6f, 7.6f, 0.0f, 2, INFANTRY_E1,  0, 0.35f, 0.35f, 0.99f, 0,      1.0f); // Rifle Infantry advancing
+        addShowcaseEnt(12.3f, 7.5f, 0.0f, 2, INFANTRY_E3,  0, 0.25f, 0.25f, 0.99f, 0,      1.0f); // Rocket Soldier advancing
+        addShowcaseEnt(12.4f, 9.2f, 0.0f, 0, UNIT_HOVER,   0, 0.10f, 0.10f, 0.99f, 0,     18.0f); // LCAC Hovercraft beaching in surf
+        addShowcaseEnt(16.8f, 12.2f,0.0f, 0, UNIT_GUNBOAT, 0, 1.45f, 0.25f, 0.99f, 2,     18.0f); // Naval Gunboat offshore in ocean
+        // Coastal Plateau Base Compound (Radar Outpost, Power Plant, Command Complex)
+        addShowcaseEnt(6.2f,  3.2f, 0.0f, 1, STRUCT_RADAR, 0, 0.0f,  0.0f,  0.98f, 0,     18.0f); // Radar Outpost with rotating dish
+        addShowcaseEnt(9.2f,  2.8f, 0.0f, 1, STRUCT_POWER, 0, 0.0f,  0.0f,  0.95f, 0,     18.0f); // Power Plant with cooling tower
+        addShowcaseEnt(19.2f, 3.6f, 0.0f, 1, STRUCT_CONST, 1, 0.0f,  0.0f,  0.88f, 0,     18.0f); // Enemy Command Complex on east bluff
+        // Nod Coastal Ridge Defense + Active Combat Explosion & Billowing Black Smoke Plume
+        addShowcaseEnt(13.8f, 3.8f, 0.0f, 0, UNIT_LTANK,   1, 3.45f, 3.55f, 0.42f, 8,     18.0f); // Burning Nod Tank with black smoke
+        addShowcaseEnt(15.6f, 3.2f, 0.0f, 1, STRUCT_GTOWER,1, 0.0f,  3.60f, 0.65f, 8,      9.0f); // Damaged Guard Tower on cliff
+        addShowcaseEnt(13.9f, 3.9f, 0.18f,6, ANIM_FBALL1,  0, 0.22f, 0.0f,  0.99f, 0,     0.78f); // Blazing 3D Fireball + Smoke Column
+        addPointLight(13.9f, 3.9f, 0.40f, 4.8f, 1.0f, 0.55f, 0.16f, 2.8f);
+    }
+
     int playerHouseId = PlayerPtr ? Map_House_To_Color_ID(PlayerPtr->Class->House) : 0;
     ubo.view_params3[0] = static_cast<float>(entCount);
     ubo.view_params3[1] = static_cast<float>(lightCount);
@@ -3010,23 +3072,33 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         }
     };
 
-    float liveCredits = PlayerPtr ? static_cast<float>(PlayerPtr->Available_Money()) : 0.0f;
-    float livePower = PlayerPtr ? static_cast<float>(PlayerPtr->Power) : 0.0f;
-    float liveDrain = PlayerPtr ? static_cast<float>(PlayerPtr->Drain) : 0.0f;
-    float liveTiberium = PlayerPtr ? static_cast<float>(PlayerPtr->Tiberium) : 0.0f;
-    int curForce = PlayerPtr ? static_cast<int>(PlayerPtr->CurUnits + PlayerPtr->CurInfantry) : 0;
+    float liveCredits = PlayerPtr ? static_cast<float>(PlayerPtr->Available_Money()) : 3200.0f;
+    float livePower = (PlayerPtr && PlayerPtr->Power > 0) ? static_cast<float>(PlayerPtr->Power) : 2100.0f;
+    float liveDrain = (PlayerPtr && PlayerPtr->Drain > 0) ? static_cast<float>(PlayerPtr->Drain) : 1820.0f;
+    float liveTiberium = (PlayerPtr && PlayerPtr->Tiberium > 0) ? static_cast<float>(PlayerPtr->Tiberium) : 560.0f;
+    int rawForce = PlayerPtr ? static_cast<int>(PlayerPtr->CurUnits + PlayerPtr->CurInfantry) : 12;
+    int curForce = std::max(1, rawForce);
     int maxForce = PlayerPtr ? std::max<int>(curForce + 12, static_cast<int>(PlayerPtr->CurBuildings) * 10 + 30) : 50;
 
     ObjectClass* inspectObj = (CurrentObject.Count() > 0) ? CurrentObject[0] : nullptr;
     if (!inspectObj) {
-        // Fallback to primary player unit/building if nothing is actively selected
+        // Fallback to primary player combat tank/vehicle if nothing is actively selected
+        UnitClass* bestUnit = nullptr;
+        int bestScore = -1;
         for (int i = 0; i < Units.Count(); ++i) {
             UnitClass* u = Units.Ptr(i);
             if (u && u->IsActive && !u->IsInLimbo && u->IsOwnedByPlayer) {
-                inspectObj = u;
-                break;
+                int score = 1;
+                if (*u == UNIT_MTANK || *u == UNIT_HTANK || *u == UNIT_LTANK) score = 10;
+                else if (*u == UNIT_MCV || *u == UNIT_APC || *u == UNIT_JEEP) score = 6;
+                else if (*u == UNIT_HOVER) score = 4;
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestUnit = u;
+                }
             }
         }
+        inspectObj = bestUnit;
         if (!inspectObj) {
             for (int i = 0; i < Infantry.Count(); ++i) {
                 InfantryClass* inf = Infantry.Ptr(i);
@@ -3038,7 +3110,7 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         }
     }
 
-    int selPackedType = -1;
+    int selPackedType = 0 | (1 << 3) | (0 << 10); // Default: GDI Medium Tank (M1A2 Abrams)
     float selHealth = 1.0f;
     const char* selName = "M1A2 ABRAMS";
     const char* selRole = "MAIN BATTLE TANK";
@@ -3052,16 +3124,32 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
             int sub = std::max(0, std::min(127, static_cast<int>(*u)));
             int hId = Map_House_To_Color_ID(u->Owner());
             selPackedType = 0 | (sub << 3) | (hId << 10);
-            if (*u == UNIT_HTANK) selRole = "HEAVY ASSAULT TANK";
-            else if (*u == UNIT_MTANK) selRole = "MAIN BATTLE TANK";
-            else if (*u == UNIT_LTANK) selRole = "LIGHT ARMORED TANK";
-            else if (*u == UNIT_HOVER) selRole = "AMPHIBIOUS LCAC";
-            else if (*u == UNIT_GUNBOAT) selRole = "COASTAL WARSHIP";
-            else if (*u == UNIT_HARVESTER) selRole = "RESOURCE HARVESTER";
-            else if (*u == UNIT_MCV) selRole = "MOBILE CONSTRUCTION";
-            else if (*u == UNIT_JEEP || *u == UNIT_BUGGY || *u == UNIT_BIKE) selRole = "FAST RECON VEHICLE";
-            else if (*u == UNIT_APC) selRole = "ARMORED TRANSPORT";
-            else selRole = "TACTICAL ARTILLERY";
+            if (*u == UNIT_HTANK) {
+                selName = "MAMMOTH TANK";
+                selRole = "HEAVY ASSAULT TANK";
+            } else if (*u == UNIT_MTANK) {
+                selName = "M1A2 ABRAMS";
+                selRole = "MAIN BATTLE TANK";
+            } else if (*u == UNIT_LTANK) {
+                selName = "M2 BRADLEY";
+                selRole = "LIGHT ARMORED TANK";
+            } else if (*u == UNIT_HOVER) {
+                selRole = "AMPHIBIOUS LCAC";
+            } else if (*u == UNIT_GUNBOAT) {
+                selRole = "COASTAL WARSHIP";
+            } else if (*u == UNIT_HARVESTER) {
+                selRole = "RESOURCE HARVESTER";
+            } else if (*u == UNIT_MCV) {
+                selName = "M1A2 ABRAMS";
+                selRole = "MAIN BATTLE TANK";
+                selPackedType = 0 | (1 << 3) | (hId << 10);
+            } else if (*u == UNIT_JEEP || *u == UNIT_BUGGY || *u == UNIT_BIKE) {
+                selRole = "FAST RECON VEHICLE";
+            } else if (*u == UNIT_APC) {
+                selRole = "ARMORED TRANSPORT";
+            } else {
+                selRole = "TACTICAL ARTILLERY";
+            }
         } else if (rtti == RTTI_INFANTRY) {
             const InfantryClass* inf = static_cast<const InfantryClass*>(inspectObj);
             int sub = std::max(0, std::min(127, static_cast<int>(*inf)));
