@@ -1940,8 +1940,6 @@ public:
                             if (in3DScene) {
                                 // Clear legacy 2D terrain bytes inside cursor box so 3D shader composites clean cursor
                                 stagePtr[dy * width + dx] = cpx;
-                            } else if (cpx != 0) {
-                                stagePtr[dy * width + dx] = cpx;
                             }
                         }
                     }

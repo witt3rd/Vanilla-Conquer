@@ -795,6 +795,124 @@ float evaluateSingleEntitySDF(
 }
 
 // ----------------------------------------------------------------------------
+// 4K Armored Metal, Hex Rivets, CRT Glass & Tactical Cursor Helpers for HUD/UI
+// ----------------------------------------------------------------------------
+float sdTacticalCursor(vec2 p) {
+    vec2 v0 = vec2(0.0, 0.0);
+    vec2 v1 = vec2(0.08, 0.92);
+    vec2 v2 = vec2(0.32, 0.68);
+    vec2 v3 = vec2(0.54, 1.05);
+    vec2 v4 = vec2(0.68, 0.96);
+    vec2 v5 = vec2(0.46, 0.60);
+    vec2 v6 = vec2(0.78, 0.56);
+
+    vec2 poly[7] = vec2[7](v0, v1, v2, v3, v4, v5, v6);
+    float d = dot(p - poly[0], p - poly[0]);
+    float s = 1.0;
+    for (int i = 0, j = 6; i < 7; j = i, i++) {
+        vec2 e = poly[j] - poly[i];
+        vec2 w = p - poly[i];
+        vec2 b = w - e * clamp(dot(w, e) / dot(e, e), 0.0, 1.0);
+        d = min(d, dot(b, b));
+        bvec3 cond = bvec3(p.y >= poly[i].y, p.y < poly[j].y, e.x * w.y > e.y * w.x);
+        if (all(cond) || all(not(cond))) s *= -1.0;
+    }
+    return s * sqrt(d);
+}
+
+vec3 fetchFB(vec2 uv) {
+    uint idx = texture(uFrameIndex, clamp(uv, vec2(0.0005), vec2(0.9995))).r & 0xFFu;
+    return uPalette.colors[idx].rgb;
+}
+
+// Evaluates a 3D recessed socket + hexagonal bolt head at centerPx (in 640x400 coords)
+void addHexRivet(vec2 px, vec2 centerPx, float radPx, inout vec2 normalXY, inout float aoMult) {
+    vec2 d = px - centerPx;
+    float r = length(d);
+    if (r < radPx * 1.45) {
+        // Outer recessed socket ring
+        float socketRing = smoothstep(radPx * 1.40, radPx * 0.95, r) * smoothstep(radPx * 0.65, radPx * 0.95, r);
+        aoMult *= (1.0 - 0.55 * socketRing);
+        if (r < radPx * 0.88) {
+            // Raised domed hex bolt head
+            vec2 domeN = (d / max(radPx * 0.88, 1e-3)) * 1.35;
+            normalXY += domeN;
+            aoMult *= mix(0.88, 1.08, smoothstep(radPx * 0.88, 0.0, r));
+        }
+    }
+}
+
+// Shades a 4K anisotropic brushed gunmetal/titanium plate with multi-light PBR specular
+vec3 shadeArmoredMetalPlate(
+    vec2 px,
+    vec2 macroNormalXY,
+    vec3 baseMetalAlbedo,
+    float roughness,
+    float aoMult,
+    vec2 mouseUV,
+    float time
+) {
+    // Multi-scale anisotropic brushed steel micro-grooves + battle wear
+    float brushH = noise2D(px * vec2(1.6, 14.0)) * 0.65 + noise2D(px * vec2(5.5, 42.0)) * 0.35;
+    float brushV = noise2D(px * vec2(14.0, 1.6)) * 0.50;
+    float patina = fbm3(px * 0.14);
+    float scratch = smoothstep(0.76, 0.92, noise2D(px * vec2(0.85, 3.4) + vec2(patina * 2.0)));
+
+    vec2 microGrad = vec2(
+        (noise2D(px * vec2(3.5, 18.0) + vec2(0.15, 0.0)) - brushH) * 0.55,
+        (noise2D(px * vec2(3.5, 18.0) + vec2(0.0, 0.15)) - brushH) * 1.25
+    );
+
+    vec3 N = normalize(vec3(-macroNormalXY.x - microGrad.x * 0.35, -macroNormalXY.y - microGrad.y * 0.35, 1.0));
+    vec3 V = vec3(0.0, 0.0, 1.0);
+
+    vec3 albedo = baseMetalAlbedo * (0.82 + 0.28 * brushH + 0.08 * brushV) * (0.86 + 0.26 * patina);
+    albedo += vec3(0.14, 0.15, 0.16) * scratch * 0.45;
+
+    float specPow = mix(48.0, 12.0, clamp(roughness, 0.05, 0.95));
+
+    // Light 1: Overhead Warm Battlefield Key Light (Upper-Left)
+    vec3 L1 = normalize(vec3(-0.38, -0.58, 0.72));
+    vec3 H1 = normalize(L1 + V);
+    float diff1 = max(dot(N, L1), 0.0);
+    float spec1 = pow(max(dot(N, H1), 0.0), specPow);
+
+    // Light 2: Warm Furnace / Explosion Bounce Light (Lower-Left)
+    vec3 L2 = normalize(vec3(-0.45, 0.52, 0.72));
+    vec3 H2 = normalize(L2 + V);
+    float diff2 = max(dot(N, L2), 0.0);
+    float spec2 = pow(max(dot(N, H2), 0.0), specPow * 0.75);
+
+    // Light 3: Emerald EVA CRT Phosphor Rim Light
+    vec3 L3 = normalize(vec3(0.28, -0.25, 0.92));
+    vec3 H3 = normalize(L3 + V);
+    float spec3 = pow(max(dot(N, H3), 0.0), specPow);
+
+    // Light 4: Live Interactive Mouse Cursor Point Light
+    vec2 uvNow = px / vec2(640.0, 400.0);
+    vec3 posM = vec3(mouseUV, 0.14);
+    vec3 dirM = normalize(posM - vec3(uvNow, 0.0));
+    float distM = length((posM.xy - uvNow) * vec2(1.6, 1.0));
+    float attenM = exp(-distM * 6.0);
+    vec3 HM = normalize(dirM + V);
+    float specM = pow(max(dot(N, HM), 0.0), 38.0) * attenM;
+    float diffM = max(dot(N, dirM), 0.0) * attenM;
+
+    // Subtle animated battlefield ember sweep across beveled edges
+    float bevelMag = clamp(length(macroNormalXY), 0.0, 1.5);
+    float emberPulse = 0.75 + 0.25 * sin(time * 1.7 + px.x * 0.02);
+
+    vec3 col = albedo * (0.28 + 0.58 * diff1 + 0.24 * diff2);
+    col += vec3(1.0, 0.78, 0.52) * spec1 * (0.38 + 0.25 * scratch);
+    col += vec3(1.0, 0.46, 0.16) * spec2 * 0.24 * emberPulse;
+    col += vec3(0.22, 0.95, 0.48) * spec3 * 0.16;
+    col += vec3(0.55, 0.98, 0.68) * (specM * 0.48 + diffM * 0.14);
+    col += vec3(0.95, 0.62, 0.26) * bevelMag * 0.12 * emberPulse;
+
+    return clamp(col * aoMult, 0.0, 1.0);
+}
+
+// ----------------------------------------------------------------------------
 // Main Native-4K 3D Tactical Battlefield & UI Compositor
 // ----------------------------------------------------------------------------
 void main() {
@@ -811,6 +929,9 @@ void main() {
     vec4 tipRect = uTac.overlay_rects[2];
     bool inTooltip = (tipRect.z > tipRect.x && vUV.x >= tipRect.x && vUV.x <= tipRect.z && vUV.y >= tipRect.y && vUV.y <= tipRect.w);
 
+    vec4 curRect = uTac.overlay_rects[3];
+    vec2 mouseUV = clamp(curRect.xy, vec2(0.0), vec2(1.0));
+
     // Sample 8-bit software framebuffer for UI / HUD / Dialogs / Messages / Cursor
     uint palIdx = texture(uFrameIndex, vUV).r & 0xFFu;
     vec3 fbColor = uPalette.colors[palIdx].rgb;
@@ -820,30 +941,386 @@ void main() {
     bool inMsgText = (inTacViewport && msgV1 > 0.001 && vUV.y < msgV1 && palIdx != 0u && palIdx != 12u);
 
     if (!inTacViewport || inDialog || inTooltip || inMsgText) {
+        vec2 px = vUV * vec2(640.0, 400.0);
+        vec2 stepUV = vec2(1.0 / 640.0, 1.0 / 400.0);
+        vec3 fbE = fetchFB(vUV + vec2( stepUV.x, 0.0));
+        vec3 fbW = fetchFB(vUV + vec2(-stepUV.x, 0.0));
+        vec3 fbS = fetchFB(vUV + vec2(0.0,  stepUV.y));
+        vec3 fbN = fetchFB(vUV + vec2(0.0, -stepUV.y));
+
+        float lum  = dot(fbColor, vec3(0.299, 0.587, 0.114));
+        float lumE = dot(fbE, vec3(0.299, 0.587, 0.114));
+        float lumW = dot(fbW, vec3(0.299, 0.587, 0.114));
+        float lumS = dot(fbS, vec3(0.299, 0.587, 0.114));
+        float lumN = dot(fbN, vec3(0.299, 0.587, 0.114));
+
+        float greenDom = fbColor.g - max(fbColor.r, fbColor.b);
+        float greenNeighbor = max(
+            max(fbE.g - max(fbE.r, fbE.b), fbW.g - max(fbW.r, fbW.b)),
+            max(fbS.g - max(fbS.r, fbS.b), fbN.g - max(fbN.r, fbN.b))
+        );
+        float chroma = max(fbColor.r, max(fbColor.g, fbColor.b)) - min(fbColor.r, min(fbColor.g, fbColor.b));
+        bool isNeutralStone = (chroma < 0.095 && greenDom < 0.045 && lum > 0.035 && lum < 0.62);
+        float crtScan = 0.92 + 0.08 * sin(vUV.y * 1600.0 * PI);
+
+        // Extract 3D micro-bevel normal from legacy UI button/panel highlights & shadows
+        vec2 fbGrad = vec2(lumE - lumW, lumS - lumN);
         vec3 uiCol = fbColor;
 
-        // Upgrade Top Tab Bar & Right Sidebar with subtle 4K metallic bevels & CRT radar sheen
-        if (!inTacViewport) {
-            float grain = (hash12(vUV * vec2(1920.0, 1080.0)) - 0.5) * 0.025;
-            uiCol = clamp(uiCol + vec3(grain), 0.0, 1.0);
-            // Bevel highlight along tactical viewport frame border
-            float borderDistX = abs(vUV.x - tacRect.z) * 640.0;
-            float borderDistY = abs(vUV.y - tacRect.y) * 400.0;
-            if (borderDistX < 2.2 && vUV.y >= tacRect.y) {
-                uiCol += vec3(0.18, 0.20, 0.22) * (1.0 - borderDistX / 2.2);
+        // ====================================================================
+        // A. IN-GAME MODAL COMMAND MENUS & DIALOGS (Options, Controls, Load/Save)
+        // ====================================================================
+        if (inDialog) {
+            vec2 dMinPx = dlgRect.xy * vec2(640.0, 400.0);
+            vec2 dMaxPx = dlgRect.zw * vec2(640.0, 400.0);
+            vec2 dEdgePx = min(px - dMinPx, dMaxPx - px);
+            float edgePx = min(dEdgePx.x, dEdgePx.y);
+
+            vec2 plateN = fbGrad * 2.2;
+            float ao = 1.0;
+
+            // Outer 8-px heavy machined titanium armor bezel around the dialog
+            if (edgePx < 8.5) {
+                vec2 outDir = vec2(
+                    (px.x - dMinPx.x < dMaxPx.x - px.x) ? -1.0 : 1.0,
+                    (px.y - dMinPx.y < dMaxPx.y - px.y) ? -1.0 : 1.0
+                );
+                vec2 maskEdge = step(dEdgePx.xy, dEdgePx.yx);
+                if (edgePx < 3.5) {
+                    plateN = outDir * maskEdge * 1.45;
+                } else if (edgePx > 5.5) {
+                    plateN = -outDir * maskEdge * 1.25;
+                }
+                // Seam groove at edgePx == 7.5
+                float groove = exp(-pow((edgePx - 7.5) * 2.2, 2.0));
+                ao *= (1.0 - 0.65 * groove);
             }
-            if (borderDistY < 1.8 && vUV.x < tacRect.z) {
-                uiCol += vec3(0.16, 0.18, 0.20) * (1.0 - borderDistY / 1.8);
+
+            // Recessed header bar seam below dialog caption
+            float headerY = dMinPx.y + 28.0;
+            if (abs(px.y - headerY) < 1.8 && edgePx >= 8.0) {
+                plateN.y += (px.y < headerY) ? 0.9 : -0.9;
+                ao *= 0.62;
             }
-        } else if (inDialog) {
-            // Sleek 4K titanium-glass frame glow around modal in-game dialog
-            vec2 dEdge = min(vUV - dlgRect.xy, dlgRect.zw - vUV) * vec2(640.0, 400.0);
-            float edgePx = min(dEdge.x, dEdge.y);
-            if (edgePx < 2.5) {
-                uiCol = mix(vec3(0.25, 0.85, 0.45), uiCol, edgePx / 2.5);
+
+            // 8 Corner + Mid-Rail Hex Bolts on the Dialog Armor Frame
+            addHexRivet(px, dMinPx + vec2(5.0, 5.0), 2.4, plateN, ao);
+            addHexRivet(px, vec2(dMaxPx.x - 5.0, dMinPx.y + 5.0), 2.4, plateN, ao);
+            addHexRivet(px, vec2(dMinPx.x + 5.0, dMaxPx.y - 5.0), 2.4, plateN, ao);
+            addHexRivet(px, dMaxPx - vec2(5.0, 5.0), 2.4, plateN, ao);
+            if (dMaxPx.y - dMinPx.y > 120.0) {
+                float midY = 0.5 * (dMinPx.y + dMaxPx.y);
+                addHexRivet(px, vec2(dMinPx.x + 5.0, midY), 2.2, plateN, ao);
+                addHexRivet(px, vec2(dMaxPx.x - 5.0, midY), 2.2, plateN, ao);
+            }
+
+            vec3 metalChassis = shadeArmoredMetalPlate(
+                px, plateN, vec3(0.14, 0.16, 0.175), 0.34, ao, mouseUV, time
+            );
+
+            if (edgePx < 7.0) {
+                // Outer machined titanium frame
+                uiCol = metalChassis;
+                // Glowing emerald inner seal line along edgePx == 6.8
+                float sealGlow = exp(-pow((edgePx - 6.8) * 2.5, 2.0));
+                uiCol += vec3(0.18, 0.88, 0.42) * sealGlow * 0.55;
+            } else if (isNeutralStone) {
+                // Convert 1995 BTEXTURE.SHP gray pebble fill into 4K brushed gunmetal armor & 3D beveled buttons
+                float btnRelief = clamp((lum - 0.25) * 1.4, -0.25, 0.35);
+                uiCol = metalChassis * (0.88 + 0.35 * btnRelief);
+                // Add subtle phosphor bloom around neighboring green text/borders
+                if (greenNeighbor > 0.06) {
+                    uiCol += vec3(0.08, 0.42, 0.18) * greenNeighbor * 0.55;
+                }
+            } else if (lum <= 0.04) {
+                // Recessed Listboxes, Savegame Slots & Slider Tracks -> Smoked Emerald CRT Glass
+                float refresh = exp(-pow(( fract(vUV.y * 2.0 - time * 0.25) - 0.5) * 8.0, 2.0));
+                uiCol = vec3(0.018, 0.058, 0.030) * crtScan + vec3(0.04, 0.16, 0.08) * refresh * 0.25;
+                if (greenNeighbor > 0.05) {
+                    uiCol += vec3(0.10, 0.48, 0.22) * greenNeighbor * 0.65;
+                }
+            } else if (greenDom >= 0.045) {
+                // C&C Green Typography, Captions, Sliders & Button Borders -> Luminous 4K Emerald Phosphor
+                uiCol = fbColor * crtScan * 1.28 + vec3(0.08, 0.38, 0.16) * greenDom;
+            } else {
+                // Gold/White Highlights, Filigree & Selected Text -> Polished Ion-Gold / Titanium
+                uiCol = mix(metalChassis, fbColor * 1.18, 0.82) + vec3(0.12, 0.10, 0.06) * clamp(lum - 0.4, 0.0, 0.6);
             }
         }
-        outColor = vec4(uiCol * fade, 1.0);
+        // ====================================================================
+        // B. TOP EVA COMMAND TAB BAR (OPTIONS | CONDUIT | CREDITS | SIDEBAR)
+        // ====================================================================
+        else if (!inTacViewport && px.y < 16.5) {
+            vec2 plateN = fbGrad * 1.8;
+            float ao = 1.0;
+
+            // 4 modular bays: [0..160) Options, [160..320) Conduit, [320..480) Credits, [480..640) Sidebar
+            float bayX = mod(px.x, 160.0);
+            float bayEdgeX = min(bayX, 160.0 - bayX);
+            float bayEdgeY = min(px.y, 15.5 - px.y);
+            float bayEdge = min(bayEdgeX, bayEdgeY);
+
+            if (bayEdge < 2.2) {
+                plateN.x += (bayX < 80.0) ? -1.1 : 1.1;
+                plateN.y += (px.y < 8.0) ? -1.2 : 1.2;
+                ao *= smoothstep(0.0, 1.5, bayEdge) * 0.5 + 0.5;
+            }
+
+            // Corner hex rivets on the 4 overhead modules
+            float modOriginX = floor(px.x / 160.0) * 160.0;
+            addHexRivet(px, vec2(modOriginX + 7.0, 7.5), 1.8, plateN, ao);
+            addHexRivet(px, vec2(modOriginX + 153.0, 7.5), 1.8, plateN, ao);
+
+            // Center Conduit [160..320) horizontal cooling ribs
+            if (px.x >= 160.0 && px.x < 320.0 && bayEdge >= 2.2) {
+                float rib = sin(px.y * 2.1);
+                plateN.y += rib * 0.65;
+                ao *= (0.78 + 0.22 * rib);
+            }
+
+            vec3 tabMetal = shadeArmoredMetalPlate(
+                px, plateN, vec3(0.15, 0.17, 0.185), 0.32, ao, mouseUV, time
+            );
+
+            // Recessed Digital CRT Screen for Credits Counter [334..466, 2..13.5]
+            bool inCreditsScreen = (px.x >= 334.0 && px.x <= 466.0 && px.y >= 2.0 && px.y <= 13.5);
+
+            if (inCreditsScreen) {
+                if (greenDom > 0.03 || lum > 0.25) {
+                    // Glowing emerald/gold digital credit numerals
+                    uiCol = fbColor * 1.32 + vec3(0.08, 0.42, 0.18) * max(greenDom, 0.15);
+                } else {
+                    // Recessed dark emerald CRT glass bay
+                    uiCol = vec3(0.015, 0.052, 0.026) * crtScan;
+                    if (greenNeighbor > 0.04) {
+                        uiCol += vec3(0.08, 0.38, 0.16) * greenNeighbor * 0.65;
+                    }
+                }
+            } else if (greenDom > 0.04 || (lum > 0.38 && !isNeutralStone)) {
+                // OPTIONS / SIDEBAR glowing typography
+                uiCol = fbColor * 1.25 + vec3(0.08, 0.36, 0.15) * max(greenDom, 0.1);
+            } else {
+                uiCol = tabMetal;
+                if (greenNeighbor > 0.04) {
+                    uiCol += vec3(0.08, 0.38, 0.16) * greenNeighbor * 0.5;
+                }
+            }
+        }
+        // ====================================================================
+        // C. RIGHT TACTICAL COMMAND SIDEBAR (Radar, Repair/Sell/Map, Power, Cameos)
+        // ====================================================================
+        else if (!inTacViewport && px.x >= 479.5) {
+            vec2 plateN = fbGrad * 1.8;
+            float ao = 1.0;
+
+            // Left structural armor rail along x = 480..484
+            if (px.x < 484.0) {
+                plateN.x -= (484.0 - px.x) * 0.45;
+            } else if (px.x > 636.0) {
+                plateN.x += (px.x - 636.0) * 0.45;
+            }
+
+            // Horizontal module divider seams at y = 155, y = 180, y = 373
+            float dSeam = min(min(abs(px.y - 155.0), abs(px.y - 180.0)), abs(px.y - 373.5));
+            if (dSeam < 1.6) {
+                plateN.y += (px.y < 155.0 || (px.y > 178.0 && px.y < 180.0) || (px.y > 371.5 && px.y < 373.5)) ? 1.1 : -1.1;
+                ao *= 0.55;
+            }
+
+            // 1. UPPER RADAR MODULE (y in [16, 155))
+            if (px.y < 155.0) {
+                bool inRadarScreen = (px.x >= 496.0 && px.x < 624.0 && px.y >= 21.0 && px.y < 149.0);
+                if (inRadarScreen) {
+                    vec2 rUV = (px - vec2(496.0, 21.0)) / 128.0;
+                    vec2 rCenter = rUV - vec2(0.5);
+                    float rEdge = min(min(rUV.x, 1.0 - rUV.x), min(rUV.y, 1.0 - rUV.y)) * 128.0;
+                    float innerShadow = smoothstep(0.0, 3.5, rEdge);
+
+                    // Sweeping radar phosphor line & subtle tactical grid
+                    float angle = atan(rCenter.y, rCenter.x);
+                    float sweep = fract((angle + PI) / (2.0 * PI) - time * 0.28);
+                    float sweepGlow = pow(sweep, 6.0) * 0.22;
+                    vec2 gridF = abs(fract(rUV * 8.0) - 0.5);
+                    float reticle = smoothstep(0.47, 0.50, max(gridF.x, gridF.y)) * 0.08;
+
+                    if (isNeutralStone) {
+                        // Replace flat gray background in inactive radar with dark CRT glass + reticle
+                        uiCol = (vec3(0.018, 0.055, 0.028) + vec3(0.06, 0.28, 0.12) * (sweepGlow + reticle)) * crtScan;
+                    } else if (lum <= 0.03) {
+                        // Unmapped/black radar background -> Smoked CRT phosphor glass with radar sweep
+                        uiCol = (vec3(0.012, 0.042, 0.022) + vec3(0.05, 0.25, 0.11) * (sweepGlow + reticle)) * crtScan;
+                    } else {
+                        // Active radar minimap terrain/units or GDI/Nod radar emblem
+                        uiCol = fbColor * crtScan * 1.18 + vec3(0.04, 0.18, 0.08) * sweepGlow;
+                    }
+                    // Curved CRT glass specular reflection
+                    float glassSpec = exp(-length(rUV - vec2(0.32, 0.28)) * 4.2) * 0.12;
+                    uiCol = (uiCol + vec3(0.18, 0.32, 0.22) * glassSpec) * (0.55 + 0.45 * innerShadow);
+                } else {
+                    // Outer Radar Heavy Titanium Bezel
+                    vec2 rBox = max(vec2(496.0 - px.x, 21.0 - px.y), vec2(px.x - 624.0, px.y - 149.0));
+                    float dScreen = length(max(rBox, vec2(0.0)));
+                    if (dScreen < 4.5) {
+                        plateN += normalize(px - vec2(560.0, 85.0)) * 1.25;
+                    }
+                    addHexRivet(px, vec2(488.0, 23.0), 2.2, plateN, ao);
+                    addHexRivet(px, vec2(632.0, 23.0), 2.2, plateN, ao);
+                    addHexRivet(px, vec2(488.0, 147.0), 2.2, plateN, ao);
+                    addHexRivet(px, vec2(632.0, 147.0), 2.2, plateN, ao);
+                    uiCol = shadeArmoredMetalPlate(px, plateN, vec3(0.15, 0.17, 0.185), 0.32, ao, mouseUV, time);
+                }
+            }
+            // 2. MIDDLE COMMAND BUTTON STRIP (Repair, Sell, Map: y in [155, 180))
+            else if (px.y < 180.0) {
+                bool inBtn1 = (px.x >= 484.0 && px.x < 533.0 && px.y >= 159.0 && px.y < 178.0);
+                bool inBtn2 = (px.x >= 537.0 && px.x < 586.0 && px.y >= 159.0 && px.y < 178.0);
+                bool inBtn3 = (px.x >= 590.0 && px.x < 639.0 && px.y >= 159.0 && px.y < 178.0);
+
+                if (inBtn1 || inBtn2 || inBtn3) {
+                    float bx0 = inBtn1 ? 484.0 : (inBtn2 ? 537.0 : 590.0);
+                    vec2 bMin = vec2(bx0, 159.0);
+                    vec2 bMax = vec2(bx0 + 49.0, 178.0);
+                    vec2 bEdge = min(px - bMin, bMax - px);
+                    float edgeD = min(bEdge.x, bEdge.y);
+                    if (edgeD < 2.2) {
+                        plateN.x += (px.x - bMin.x < 24.5) ? -1.2 : 1.2;
+                        plateN.y += (px.y - bMin.y < 9.5) ? -1.2 : 1.2;
+                    }
+                    vec3 btnMetal = shadeArmoredMetalPlate(px, plateN, vec3(0.17, 0.19, 0.21), 0.28, ao, mouseUV, time);
+                    if (!isNeutralStone && lum > 0.08) {
+                        uiCol = mix(btnMetal, fbColor * 1.22, 0.80);
+                    } else {
+                        uiCol = btnMetal;
+                    }
+                } else {
+                    ao *= 0.68;
+                    uiCol = shadeArmoredMetalPlate(px, plateN, vec3(0.11, 0.125, 0.135), 0.42, ao, mouseUV, time);
+                }
+            }
+            // 3. LOWER SIDEBAR: POWER REACTOR COLUMN & PRODUCTION CAMEO BAYS (y in [180, 400))
+            else {
+                // Power Reactor Column (x in [480, 496))
+                if (px.x < 496.0) {
+                    bool inTube = (px.x >= 483.0 && px.x <= 493.0 && px.y >= 184.0 && px.y <= 396.0);
+                    if (inTube) {
+                        float cylNx = (px.x - 488.0) / 5.0;
+                        float glassSpec = pow(max(1.0 - abs(cylNx - 0.25), 0.0), 6.0) * 0.32;
+                        float tick = smoothstep(0.82, 0.96, sin(px.y * (PI / 3.0))) * 0.12;
+                        if (!isNeutralStone && (chroma > 0.12 || greenDom > 0.04) && lum > 0.10) {
+                            // Illuminated Reactor Plasma Column (Green / Yellow / Red)
+                            uiCol = fbColor * 1.45 * (1.0 - 0.25 * cylNx * cylNx) + vec3(0.25, 0.45, 0.28) * glassSpec;
+                        } else {
+                            // Dark Smoked Cylindrical Reactor Glass Tube
+                            uiCol = vec3(0.02, 0.045, 0.03) * crtScan + vec3(0.08, 0.22, 0.12) * tick + vec3(0.18, 0.28, 0.22) * glassSpec;
+                        }
+                    } else {
+                        plateN.x += (px.x < 488.0) ? -0.9 : 0.9;
+                        // Graduation ticks along power housing
+                        if (mod(px.y, 8.0) < 1.2) {
+                            plateN.y += 0.75;
+                            ao *= 0.78;
+                        }
+                        uiCol = shadeArmoredMetalPlate(px, plateN, vec3(0.14, 0.16, 0.175), 0.34, ao, mouseUV, time);
+                    }
+                }
+                // Production Cameo Strips (Column 0: [500..564), Column 1: [568..632))
+                else {
+                    bool inCol0 = (px.x >= 500.0 && px.x < 564.0);
+                    bool inCol1 = (px.x >= 568.0 && px.x < 632.0);
+
+                    if ((inCol0 || inCol1) && px.y >= 181.0 && px.y < 373.0) {
+                        float colX0 = inCol0 ? 500.0 : 568.0;
+                        float slotX = px.x - colX0;
+                        float slotY = mod(px.y - 181.0, 48.0);
+                        float slotEdge = min(min(slotX, 64.0 - slotX), min(slotY, 48.0 - slotY));
+
+                        if (slotEdge < 1.8) {
+                            // Machined steel cameo bay bezel
+                            plateN.x += (slotX < 32.0) ? -1.2 : 1.2;
+                            plateN.y += (slotY < 24.0) ? -1.2 : 1.2;
+                            uiCol = shadeArmoredMetalPlate(px, plateN, vec3(0.16, 0.18, 0.20), 0.30, ao * 0.85, mouseUV, time);
+                        } else {
+                            float neighborVar = abs(lumE - lumW) + abs(lumS - lumN);
+                            if (isNeutralStone && neighborVar < 0.14) {
+                                // Empty Cameo Bay -> Dark Recessed Brushed Titanium Slot with Tech Grid
+                                vec2 gF = abs(fract(px * 0.25) - 0.5);
+                                float gridLine = smoothstep(0.44, 0.50, max(gF.x, gF.y)) * 0.08;
+                                uiCol = shadeArmoredMetalPlate(px, plateN * 0.5, vec3(0.09, 0.105, 0.115), 0.42, 0.78, mouseUV, time);
+                                uiCol += vec3(0.05, 0.18, 0.09) * gridLine;
+                            } else {
+                                // Active Unit / Structure Cameo Icon + READY / Clock overlay
+                                float glassSheen = exp(-((slotX - 18.0) * (slotX - 18.0) + (slotY - 12.0) * (slotY - 12.0)) / 420.0) * 0.10;
+                                vec3 cameoCol = fbColor * 1.12 + fbGrad.x * vec3(0.06) + vec3(0.18, 0.24, 0.20) * glassSheen;
+                                if (greenDom > 0.05) {
+                                    cameoCol = fbColor * 1.28 + vec3(0.08, 0.38, 0.16) * greenDom;
+                                }
+                                uiCol = clamp(cameoCol, 0.0, 1.0);
+                            }
+                        }
+                    }
+                    // Scroll Up / Down Rocker Buttons (y in [374, 399))
+                    else if ((inCol0 || inCol1) && px.y >= 374.0 && px.y < 399.0) {
+                        float colX0 = inCol0 ? 500.0 : 568.0;
+                        float btnX = mod(px.x - colX0, 32.0);
+                        float btnY = px.y - 374.0;
+                        float bEdge = min(min(btnX, 32.0 - btnX), min(btnY, 25.0 - btnY));
+                        if (bEdge < 2.2) {
+                            plateN.x += (btnX < 16.0) ? -1.3 : 1.3;
+                            plateN.y += (btnY < 12.5) ? -1.3 : 1.3;
+                        }
+                        vec3 rockerMetal = shadeArmoredMetalPlate(px, plateN, vec3(0.16, 0.18, 0.20), 0.28, ao, mouseUV, time);
+                        if (!isNeutralStone && lum > 0.12) {
+                            uiCol = mix(rockerMetal, fbColor * 1.25, 0.82);
+                        } else {
+                            uiCol = rockerMetal;
+                        }
+                    }
+                    // Vertical Armor Bulkhead Rails between Cameo Columns (x in [496..500), [564..568), [632..640))
+                    else {
+                        float railCenterX = (px.x < 500.0) ? 498.0 : ((px.x < 568.0) ? 566.0 : 636.0);
+                        plateN.x += (px.x - railCenterX) * 0.55;
+                        float boltY = floor((px.y - 181.0) / 48.0) * 48.0 + 205.0;
+                        if (px.y >= 181.0 && px.y < 373.0) {
+                            addHexRivet(px, vec2(railCenterX, boltY), 1.6, plateN, ao);
+                        }
+                        uiCol = shadeArmoredMetalPlate(px, plateN, vec3(0.14, 0.16, 0.175), 0.34, ao, mouseUV, time);
+                    }
+                }
+            }
+        }
+        // ====================================================================
+        // D. TACTICAL TOOLTIPS & SYSTEM MESSAGES
+        // ====================================================================
+        else if (inTooltip) {
+            vec2 tMinPx = tipRect.xy * vec2(640.0, 400.0);
+            vec2 tMaxPx = tipRect.zw * vec2(640.0, 400.0);
+            vec2 tEdge = min(px - tMinPx, tMaxPx - px);
+            float edgePx = min(tEdge.x, tEdge.y);
+            if (edgePx < 1.5) {
+                uiCol = vec3(0.28, 0.92, 0.48);
+            } else if (lum <= 0.08) {
+                uiCol = vec3(0.02, 0.06, 0.032) * crtScan;
+            } else {
+                uiCol = fbColor * 1.22;
+            }
+        }
+
+        // Composite Native-4K Glowing Phosphor Tactical Arrow Cursor on top of UI/Panels/Menus
+        if (curRect.x > 0.0 || curRect.y > 0.0) {
+            vec2 cRel = (vUV - mouseUV) * vec2(640.0, 400.0) / 15.0;
+            if (cRel.x >= -0.35 && cRel.x <= 1.15 && cRel.y >= -0.35 && cRel.y <= 1.35) {
+                float dCur = sdTacticalCursor(cRel);
+                float outline = smoothstep(0.075, 0.015, abs(dCur));
+                float fill = smoothstep(0.02, -0.04, dCur);
+                float glow = exp(-max(dCur, 0.0) * 8.0);
+
+                uiCol = mix(uiCol, vec3(0.08, 0.26, 0.13), fill * 0.82);
+                uiCol = mix(uiCol, vec3(0.68, 1.0, 0.62), outline * 0.96);
+                uiCol += vec3(0.22, 0.90, 0.42) * glow * 0.42;
+            }
+        }
+
+        outColor = vec4(clamp(uiCol, 0.0, 1.0) * fade, 1.0);
         return;
     }
 
@@ -1502,10 +1979,28 @@ void main() {
     vec3 mapped = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
     mapped = pow(clamp(mapped, 0.0, 1.0), vec3(0.92));
 
+    // Cast realistic 3D contact shadow from Top Tab Bar, Right Sidebar & Active Modal Dialog onto battlefield
+    float topShadow = smoothstep(0.0, 5.5, (vUV.y - tacRect.y) * 400.0);
+    float sideShadow = (tacRect.z < 0.99) ? smoothstep(0.0, 6.5, (tacRect.z - vUV.x) * 640.0) : 1.0;
+    mapped *= (0.48 + 0.52 * min(topShadow, sideShadow));
+
+    if (dlgRect.z > dlgRect.x) {
+        vec2 dCenter = 0.5 * (dlgRect.xy + dlgRect.zw) * vec2(640.0, 400.0);
+        vec2 dHalf   = 0.5 * (dlgRect.zw - dlgRect.xy) * vec2(640.0, 400.0);
+        vec2 dBox    = abs(vUV * vec2(640.0, 400.0) - dCenter) - dHalf;
+        float dOutPx = length(max(dBox, vec2(0.0)));
+        if (dOutPx > 0.0 && dOutPx < 22.0) {
+            // Dim battlefield around active modal dialog + cast outer drop shadow & emerald rim glow
+            mapped *= mix(0.28, 0.85, smoothstep(0.0, 22.0, dOutPx));
+            mapped += vec3(0.14, 0.72, 0.35) * exp(-dOutPx * 0.35) * 0.32;
+        } else {
+            mapped *= 0.85;
+        }
+    }
+
     // ------------------------------------------------------------------------
     // 11. Composite Live Tactical Mouse Cursor (MOUSE.SHP + 4K Contrast Rim)
     // ------------------------------------------------------------------------
-    vec4 curRect = uTac.overlay_rects[3];
     if (curRect.z > curRect.x && curRect.w > curRect.y) {
         if (vUV.x >= curRect.x && vUV.x < curRect.z && vUV.y >= curRect.y && vUV.y < curRect.w) {
             if (palIdx != 0u) {
