@@ -124,6 +124,12 @@ public:
     {
         return *Class;
     };
+    float Normalized_Stage(void) const
+    {
+        return (Class && Class->Stages > 1)
+                   ? static_cast<float>(Fetch_Stage()) / static_cast<float>(Class->Stages - 1)
+                   : 0.5f;
+    };
     virtual short const* Occupy_List(void) const;
     virtual short const* Overlap_List(void) const;
     virtual void Draw_It(int x, int y, WindowNumberType window);

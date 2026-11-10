@@ -149,56 +149,68 @@ vec4 sampleTerrainFields(vec2 cellPos) {
 // 3D Terrain Heightfield (in Cell Units)
 // ----------------------------------------------------------------------------
 float evaluateTerrainHeight(vec2 worldCell, vec2 globalCell, out vec4 fieldsOut) {
-    // Domain-warp coastal sampling with multi-scale coves & headlands so straight 1995 tile rows become organic bays
+    bool isShowcase = (uTac.hud_telemetry[0].x == 3200.0 && uTac.hud_telemetry[0].y == 2100.0);
+
+    // Domain-warp coastal sampling using world-locked globalCell so terrain NEVER moves or warps when panning!
     vec2 qWarp = vec2(fbm3(globalCell * 0.36 + vec2(1.7, 9.2)), fbm3(globalCell * 0.36 + vec2(8.3, 2.8)));
-    vec2 coastWarp = (qWarp - 0.5) * vec2(1.65, 1.95);
+    vec4 fExact = sampleTerrainFields(worldCell);
+    vec2 coastWarp = (qWarp - 0.5) * (isShowcase ? vec2(1.65, 1.95) : vec2(0.85, 0.85));
     vec4 fNear = sampleTerrainFields(worldCell + coastWarp * 0.65);
     vec4 fBroad = 0.25 * (
-        sampleTerrainFields(worldCell + coastWarp + vec2(-1.1, -0.9)) +
-        sampleTerrainFields(worldCell + coastWarp + vec2( 1.1, -0.9)) +
-        sampleTerrainFields(worldCell + coastWarp + vec2(-1.1,  0.9)) +
-        sampleTerrainFields(worldCell + coastWarp + vec2( 1.1,  0.9))
+        sampleTerrainFields(worldCell + coastWarp + vec2(-0.85, -0.75)) +
+        sampleTerrainFields(worldCell + coastWarp + vec2( 0.85, -0.75)) +
+        sampleTerrainFields(worldCell + coastWarp + vec2(-0.85,  0.75)) +
+        sampleTerrainFields(worldCell + coastWarp + vec2( 0.85,  0.75))
     );
-    vec4 fShoal = 0.25 * (
-        sampleTerrainFields(worldCell + coastWarp + vec2(-2.2, -1.8)) +
-        sampleTerrainFields(worldCell + coastWarp + vec2( 2.2, -1.8)) +
-        sampleTerrainFields(worldCell + coastWarp + vec2( 0.0, -2.6)) +
-        sampleTerrainFields(worldCell + coastWarp + vec2( 0.0,  2.2))
-    );
-    fieldsOut = mix(mix(fNear, fBroad, 0.50), fShoal, 0.36);
+    fieldsOut = mix(fNear, fBroad, 0.55);
 
-    // Sculpt the iconic diagonal rocky coastal peninsula (CnC-Ultra-Game.jpg):
-    // 1. Eastern ocean coastline runs diagonally from upper-center (x~12.8, y~0) down through the Naval Pier (x~15.6, y~11.0)
-    // 2. Southern surf cove indents between the rocky foreground headland (x < 11.8) and the Naval Pier (x~16.6, y~11.2)
-    float eastCoastX = 12.8 + worldCell.y * 0.28 + sin(worldCell.y * 0.58 + 0.5) * 0.95 + (qWarp.x - 0.5) * 1.65;
-    float southCoastY = 13.0 + (worldCell.x - 12.5) * 0.20 + sin(worldCell.x * 0.65) * 0.75 + (qWarp.y - 0.5) * 1.35;
-    // Foaming cove just south-west of the Naval Pier around (13.8, 13.8) while keeping x < 11.5 rocky land all the way to bottom!
-    float coveDist = length((worldCell - vec2(13.8, 13.8)) * vec2(0.45, 0.42));
-    float coveWater = smoothstep(1.35, 0.42, coveDist) * smoothstep(10.8, 12.5, worldCell.x);
-    // Keep the peninsula abutment solid under the landward end of the Naval Pier at (15.0, 10.4)
-    float pierLand = smoothstep(2.1, 0.7, length((worldCell - vec2(14.8, 10.3)) * vec2(0.80, 0.95)));
+    float waterField = 0.0;
+    float roadField  = 0.0;
+    float valleyFlat = 0.0;
+    float mtnEnvelope = 0.0;
 
-    float eastOcean = smoothstep(eastCoastX - 1.3, eastCoastX + 1.8, worldCell.x);
-    float southOcean = smoothstep(southCoastY - 1.1, southCoastY + 1.6, worldCell.y) * smoothstep(11.0, 13.2, worldCell.x);
-    float waterField = clamp(max(eastOcean, max(southOcean, coveWater)) * (1.0 - pierLand * 0.82), 0.0, 1.0);
+    if (isShowcase) {
+        vec2 penCell = worldCell;
+        float eastCoastX = 12.8 + penCell.y * 0.28 + sin(penCell.y * 0.58 + 0.5) * 0.95 + (qWarp.x - 0.5) * 1.65;
+        float southCoastY = 13.0 + (penCell.x - 12.5) * 0.20 + sin(penCell.x * 0.65) * 0.75 + (qWarp.y - 0.5) * 1.35;
+        float coveDist = length((penCell - vec2(13.8, 13.8)) * vec2(0.45, 0.42));
+        float coveWater = smoothstep(1.35, 0.42, coveDist) * smoothstep(10.8, 12.5, penCell.x);
+        float pierLand = smoothstep(2.1, 0.7, length((penCell - vec2(14.8, 10.3)) * vec2(0.80, 0.95)));
 
-    // Synthesize the main diagonal muddy tank-rutted military road from upper-left base (5.2, 4.2)
-    // down-right to the Concrete Naval Pier (15.8, 10.8), plus foreground beachhead road from bottom-center (10.2, 14.8)
-    vec2 pa = worldCell - vec2(5.2, 4.2);
-    vec2 ba = vec2(15.8, 10.8) - vec2(5.2, 4.2);
-    float hRoad1 = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
-    float dRoad1 = length(pa - ba * hRoad1 + vec2(sin(worldCell.y * 0.55) * 0.28, 0.0));
+        float eastOcean = smoothstep(eastCoastX - 1.3, eastCoastX + 1.8, penCell.x);
+        float southOcean = smoothstep(southCoastY - 1.1, southCoastY + 1.6, penCell.y) * smoothstep(11.0, 13.2, penCell.x);
+        waterField = clamp(max(eastOcean, max(southOcean, coveWater)) * (1.0 - pierLand * 0.82), 0.0, 1.0);
 
-    vec2 pa2 = worldCell - vec2(8.2, 8.8);
-    vec2 ba2 = vec2(10.2, 14.8) - vec2(8.2, 8.8);
-    float hRoad2 = clamp(dot(pa2, ba2) / dot(ba2, ba2), 0.0, 1.0);
-    float dRoad2 = length(pa2 - ba2 * hRoad2 + vec2(sin(worldCell.y * 0.75) * 0.22, 0.0));
+        vec2 pa = penCell - vec2(5.2, 4.2);
+        vec2 ba = vec2(15.8, 10.8) - vec2(5.2, 4.2);
+        float hRoad1 = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+        float dRoad1 = length(pa - ba * hRoad1 + vec2(sin(penCell.y * 0.55) * 0.28, 0.0));
 
-    float synthRoad = max(smoothstep(1.45, 0.45, dRoad1), smoothstep(1.20, 0.38, dRoad2));
-    synthRoad *= smoothstep(0.42, 0.08, waterField);
-    float roadField = max(smoothstep(0.32, 0.68, fNear.y) * (1.0 - waterField), synthRoad * 0.94);
-    // Broad gently-graded valley corridor around the road & base compounds so terrain doesn't form bubbly bumps under units
-    float valleyFlat = max(smoothstep(3.4, 1.1, dRoad1), smoothstep(2.6, 0.9, dRoad2));
+        vec2 pa2 = penCell - vec2(8.2, 8.8);
+        vec2 ba2 = vec2(10.2, 14.8) - vec2(8.2, 8.8);
+        float hRoad2 = clamp(dot(pa2, ba2) / dot(ba2, ba2), 0.0, 1.0);
+        float dRoad2 = length(pa2 - ba2 * hRoad2 + vec2(sin(penCell.y * 0.75) * 0.22, 0.0));
+
+        float synthRoad = max(smoothstep(1.45, 0.45, dRoad1), smoothstep(1.20, 0.38, dRoad2));
+        synthRoad *= smoothstep(0.42, 0.08, waterField);
+        roadField = max(smoothstep(0.32, 0.68, fNear.y) * (1.0 - waterField), synthRoad * 0.94);
+        valleyFlat = max(smoothstep(3.4, 1.1, dRoad1), smoothstep(2.6, 0.9, dRoad2));
+
+        float leftMtn   = smoothstep(6.8, 1.0, penCell.x + sin(penCell.y * 0.50) * 1.0) * smoothstep(14.5, 1.5, penCell.y);
+        float northMtn  = smoothstep(4.8, 0.2, penCell.y - penCell.x * 0.08) * smoothstep(15.5, 1.5, penCell.x);
+        float eastCliff = smoothstep(2.6, 0.4, abs(penCell.x - (eastCoastX - 1.6))) * smoothstep(9.8, 1.2, penCell.y);
+        float southCrag = smoothstep(11.6, 2.0, penCell.x) * smoothstep(11.0, 14.8, penCell.y);
+        mtnEnvelope = clamp(leftMtn * 0.92 + northMtn * 0.85 + eastCliff * 0.82 + southCrag * 0.72, 0.0, 1.0) * (1.0 - valleyFlat * 0.82);
+    } else {
+        // Live Gameplay Mode: 100% world-locked to the actual Tiberian Dawn map cells!
+        // Smooth domain-warped shoreline (fNear/fBroad + qWarp) eliminates blocky tile steps while keeping dry land 100% dry!
+        float wSmooth = mix(fNear.x, fBroad.x, 0.58);
+        waterField  = smoothstep(0.24, 0.68, wSmooth + (qWarp.x - 0.5) * 0.18) * smoothstep(0.02, 0.42, max(fExact.x, fBroad.x * 0.85));
+        roadField   = smoothstep(0.28, 0.68, mix(fExact.y, fNear.y, 0.45)) * (1.0 - waterField);
+        float rSmooth = mix(fNear.z, fBroad.z, 0.58);
+        mtnEnvelope = smoothstep(0.18, 0.75, rSmooth + (qWarp.y - 0.5) * 0.22) * (1.0 - waterField);
+        valleyFlat  = clamp(1.0 - rSmooth * 1.15, 0.20, 1.0);
+    }
 
     // Check cell flags for bridge / craters only
     ivec2 ci = ivec2(floor(worldCell));
@@ -212,27 +224,22 @@ float evaluateTerrainHeight(vec2 worldCell, vec2 globalCell, out vec4 fieldsOut)
     vec4 pbrDetail = texture(uPbrTex, globalCell * 0.072 + vec2(0.37, 0.61));
     float voronoiRock = pbrMacro.r * 0.68 + pbrDetail.r * 0.32;
 
-    // Smooth domain-warped coastal mountain ridges on left (x < 6.5), upper ridge (y < 4.5), eastern cliff peaks, and bottom-left crags
+    // Smooth C-infinity domain-warped coastal mountain ridges using world-locked globalCell (no abs() derivative crease!)
     vec2 warpedPos = globalCell * 0.45 + (qWarp - 0.5) * 1.10;
-    float ridge1 = 1.0 - abs(fbm3(warpedPos * 0.85) * 2.0 - 1.0);
-    float ridge2 = 1.0 - abs(fbm3(warpedPos * 1.65 + vec2(4.2, 7.1)) * 2.0 - 1.0);
+    float rRaw1 = fbm3(warpedPos * 0.85) * 2.0 - 1.0;
+    float rRaw2 = fbm3(warpedPos * 1.65 + vec2(4.2, 7.1)) * 2.0 - 1.0;
+    float ridge1 = clamp(1.05 - sqrt(rRaw1 * rRaw1 + 0.045), 0.0, 1.0);
+    float ridge2 = clamp(1.05 - sqrt(rRaw2 * rRaw2 + 0.045), 0.0, 1.0);
     float dryLand = smoothstep(0.05, 0.48, 1.0 - waterField);
 
-    // Towering craggy mountain peaks on the left flank, upper ridge, eastern cliff line, and foreground rocky headland
-    float leftMtn   = smoothstep(6.8, 1.0, worldCell.x + sin(worldCell.y * 0.50) * 1.0) * smoothstep(14.5, 1.5, worldCell.y);
-    float northMtn  = smoothstep(4.8, 0.2, worldCell.y - worldCell.x * 0.08) * smoothstep(15.5, 1.5, worldCell.x);
-    float eastCliff = smoothstep(2.6, 0.4, abs(worldCell.x - (eastCoastX - 1.6))) * smoothstep(9.8, 1.2, worldCell.y);
-    float southCrag = smoothstep(11.6, 2.0, worldCell.x) * smoothstep(11.0, 14.8, worldCell.y);
-    float mtnEnvelope = clamp(leftMtn * 0.92 + northMtn * 0.85 + eastCliff * 0.82 + southCrag * 0.72, 0.0, 1.0) * (1.0 - valleyFlat * 0.82);
-
-    float cragMask = smoothstep(0.42, 0.82, ridge1 * 0.65 + ridge2 * 0.35) * dryLand * (1.0 - valleyFlat * 0.78);
+    float cragMask = smoothstep(0.42, 0.82, ridge1 * 0.65 + ridge2 * 0.35) * dryLand * mtnEnvelope;
 
     // Coastal headland bluffs & sea-cliffs rising sharply along the rocky shoreline
     float coastEdge = smoothstep(0.02, 0.38, 1.0 - waterField) * smoothstep(0.92, 0.22, 1.0 - waterField);
-    float headland = coastEdge * smoothstep(0.28, 0.72, ridge1 * 0.60 + voronoiRock * 0.40) * (1.0 - roadField * 0.85);
+    float headland = coastEdge * smoothstep(0.28, 0.72, ridge1 * 0.60 + voronoiRock * 0.40) * (1.0 - roadField * 0.85) * (isShowcase ? 1.0 : fExact.z);
 
-    float mapRock = smoothstep(0.25, 0.75, fieldsOut.z + (qWarp.x - 0.5) * 0.45) * (0.45 + 0.55 * ridge1);
-    float rockField = clamp(mapRock * 0.35 + cragMask * 0.75 + headland * 0.85 + mtnEnvelope * 0.95, 0.0, 1.0);
+    float mapRock = smoothstep(0.22, 0.72, fieldsOut.z + (qWarp.x - 0.5) * 0.35) * (0.50 + 0.50 * ridge1);
+    float rockField = clamp(mapRock * (isShowcase ? 0.35 : 0.92) + cragMask * 0.75 + headland * 0.85 + mtnEnvelope * 0.95, 0.0, 1.0);
 
     // Smooth rolling micro-topography (keep high-frequency Voronoi in surface normal/albedo, not height displacement!)
     float microH = (fbm3(warpedPos * 1.4) - 0.5) * 0.045 * dryLand * (1.0 - roadField * 0.85);
@@ -1304,8 +1311,9 @@ void main() {
     float fade = clamp(uTac.view_params3.w, 0.0, 1.0);
 
     // 1. Check if pixel is in Right Sidebar, Modal Dialog Box, or Tooltip Box
-    // Extend 3D battlefield all the way to the top edge (vUV.y >= 0.0) to match CnC-Ultra-Game.jpg
-    bool inTacViewport = (vUV.x >= tacRect.x && vUV.x < tacRect.z && vUV.y < tacRect.w);
+    // Extend 3D battlefield all the way to the top edge (vUV.y >= 0.0) and full right edge when sidebar is closed
+    float tacRight = (tacRect.z > 0.95) ? 1.0 : tacRect.z;
+    bool inTacViewport = (vUV.x >= tacRect.x && vUV.x < tacRight && vUV.y < tacRect.w);
 
     vec4 dlgRect = uTac.overlay_rects[1];
     bool inDialog = (dlgRect.z > dlgRect.x && vUV.x >= dlgRect.x && vUV.x <= dlgRect.z && vUV.y >= dlgRect.y && vUV.y <= dlgRect.w);
@@ -1718,12 +1726,12 @@ void main() {
     int theater = int(floor(uTac.view_params2.w + 0.5));
 
     // Ground plane (z = 0) intersection in local 30x20 grid space & global map cell space
-    // Apply subtle 3D perspective foreshortening toward the upper horizon
-    // Use vUV.y (0..1 across full screen) so the top 16px above tacRect.y never clamp to constant y=0!
-    vec2 perspUV = vec2(
+    // In Live Gameplay Mode (!isShowcase), use exact 1:1 linear tacUV so unit selection & terrain panning are 100% locked!
+    bool isShowcase = (uTac.hud_telemetry[0].x == 3200.0 && uTac.hud_telemetry[0].y == 2100.0);
+    vec2 perspUV = isShowcase ? vec2(
         0.5 + (tacUV.x - 0.5) * mix(1.18, 0.92, vUV.y),
         pow(clamp(vUV.y, 0.0005, 1.0), 0.86)
-    );
+    ) : tacUV;
     vec2 groundCellXY = subCell + perspUV * cellsSpan;
     vec2 globalCellXY = originCell + groundCellXY;
 
@@ -1739,13 +1747,15 @@ void main() {
     vec4 terrainFields;
     vec2 camStepXY = V.xy / max(V.z, 0.42);
     float hGround = evaluateTerrainHeight(groundCellXY, globalCellXY, terrainFields);
-    // 5-step iterative terrain relief refinement along 3/4 perspective camera ray for dramatic coastal mountains & bluffs
     vec2 displacedCellXY = groundCellXY;
     vec2 displacedGlobalXY = globalCellXY;
-    for (int rStep = 0; rStep < 5; ++rStep) {
-        displacedCellXY = groundCellXY + camStepXY * (hGround * 0.92);
-        displacedGlobalXY = originCell + displacedCellXY;
-        hGround = mix(hGround, evaluateTerrainHeight(displacedCellXY, displacedGlobalXY, terrainFields), 0.72);
+    if (isShowcase) {
+        // 5-step iterative terrain relief refinement along 3/4 perspective camera ray for showcase coastal mountains
+        for (int rStep = 0; rStep < 5; ++rStep) {
+            displacedCellXY = groundCellXY + camStepXY * (hGround * 0.92);
+            displacedGlobalXY = originCell + displacedCellXY;
+            hGround = mix(hGround, evaluateTerrainHeight(displacedCellXY, displacedGlobalXY, terrainFields), 0.72);
+        }
     }
 
     vec3 terrainPos = vec3(displacedCellXY, hGround);
@@ -1807,27 +1817,28 @@ void main() {
     float surfRough = mix(0.88, 0.80, grassWeight);
     float surfMetal = 0.02;
 
-    // Scattered coastal boulders, scree stones, and dark olive scrub bushes across LAND_CLEAR
-    if (waterMask < 0.12 && roadMask < 0.25) {
-        vec2 boulderGrid = displacedGlobalXY * 3.2;
+    // Organic coastal boulders, scree stones, and olive scrub bushes clustered near crags & grassy ridges
+    if (waterMask < 0.12 && roadMask < 0.25 && (rockMask > 0.12 || grassWeight > 0.48)) {
+        vec2 boulderGrid = displacedGlobalXY * 2.4 + (pbrLo.rg - 0.5) * 0.55;
         vec2 bId = floor(boulderGrid);
         vec2 bUv = fract(boulderGrid) - vec2(0.5);
         float bRand = hash12(bId);
-        if (bRand > 0.62) {
-            vec2 bOff = (vec2(hash12(bId + vec2(3.1, 1.7)), hash12(bId + vec2(7.4, 5.3))) - 0.5) * 0.42;
-            float bRad = 0.14 + 0.16 * hash12(bId + vec2(11.2, 9.8));
+        float thresh = (rockMask > 0.25) ? 0.78 : 0.90;
+        if (bRand > thresh) {
+            vec2 bOff = (vec2(hash12(bId + vec2(3.1, 1.7)), hash12(bId + vec2(7.4, 5.3))) - 0.5) * 0.38;
+            float bRad = (0.14 + 0.14 * hash12(bId + vec2(11.2, 9.8))) * (0.75 + 0.45 * pbrHi.r);
             float bDist = length((bUv - bOff) * vec2(1.15, 0.90));
             if (bDist < bRad) {
                 float bHeight = sqrt(max(0.0, 1.0 - (bDist / bRad) * (bDist / bRad)));
-                vec3 bNormal = normalize(vec3((bUv - bOff) / bRad, bHeight * 0.85));
-                terrainN = normalize(mix(terrainN, bNormal, 0.72));
-                if (bRand > 0.82) {
+                vec3 bNormal = normalize(vec3((bUv - bOff) / bRad, bHeight * 1.15));
+                terrainN = normalize(mix(terrainN, bNormal, 0.52));
+                if (bRand > 0.88 && rockMask < 0.35) {
                     // Dark olive coastal scrub bush
-                    surfAlbedo = mix(vec3(0.11, 0.16, 0.08), vec3(0.20, 0.26, 0.13), nMicro);
+                    surfAlbedo = mix(vec3(0.14, 0.19, 0.10), vec3(0.22, 0.28, 0.15), nMicro);
                     surfRough = 0.86;
                 } else {
                     // Weathered coastal granite boulder
-                    surfAlbedo = cliffCol * (0.78 + 0.35 * nPebble);
+                    surfAlbedo = cliffCol * (0.82 + 0.30 * nPebble);
                     surfRough = 0.68;
                 }
             }
@@ -1840,13 +1851,13 @@ void main() {
     // Apply Muddy Tank-Rutted Dirt Roads & Coastal Concrete Bridges
     if (roadMask > 0.01) {
         // Parallel heavy armor track ruts carved into damp mud/gravel roads
-        float trackRut = pow(sin(displacedCellXY.x * 18.8 + displacedCellXY.y * 6.2) * 0.5 + 0.5, 3.0);
-        float treadMark = step(0.45, fract((displacedCellXY.x + displacedCellXY.y) * 22.0));
+        float trackRut = pow(sin(displacedGlobalXY.x * 18.8 + displacedGlobalXY.y * 6.2) * 0.5 + 0.5, 3.0);
+        float treadMark = step(0.45, fract((displacedGlobalXY.x + displacedGlobalXY.y) * 22.0));
         vec3 rCol = roadCol * (0.82 + 0.28 * nPebble) * (1.0 - 0.22 * trackRut * treadMark);
         float rRough = mix(0.68, 0.26, trackRut * 0.75); // Damp mud sheen in tank ruts
         if (cellSlope == 9u) {
             // 3D Poured-Concrete & Steel Girder Coastal Causeway / Bridge
-            float girder = step(0.84, abs(fract(displacedCellXY.x) * 2.0 - 1.0));
+            float girder = step(0.84, abs(fract(displacedGlobalXY.x) * 2.0 - 1.0));
             rCol = mix(vec3(0.28, 0.29, 0.31), vec3(0.42, 0.39, 0.32), girder * 0.5);
             surfMetal = mix(surfMetal, 0.42, roadMask);
             rRough = 0.48;
@@ -1864,13 +1875,13 @@ void main() {
         surfRough  = 0.56;
     }
 
-    // Apply Multi-Tiered Stratified Coastal Rock Cliffs & Scree Crevices
+    // Apply Multi-Tiered Stratified Coastal Rock Cliffs & Scree Crevices (Voronoi-fractured granite/limestone, no contour rings)
     if (rockMask > 0.01) {
-        float strataLines = sin(hGround * 48.0 + nFine * 7.5) * 0.5 + 0.5;
-        float crevice = smoothstep(0.28, 0.05, strataLines);
-        vec3 rCliff = cliffCol * (0.64 + 0.52 * strataLines) * (0.82 + 0.34 * nPebble);
-        rCliff = mix(rCliff, vec3(0.10, 0.095, 0.09), crevice * 0.65);
-        surfAlbedo = mix(surfAlbedo, rCliff, rockMask);
+        float rockFacets = clamp(pbrHi.r * 0.58 + pbrLo.r * 0.42, 0.0, 1.0);
+        float crevice = smoothstep(0.32, 0.08, rockFacets) * smoothstep(0.25, 0.70, nFine);
+        vec3 rCliff = cliffCol * (0.72 + 0.46 * rockFacets) * (0.85 + 0.30 * nPebble);
+        rCliff = mix(rCliff, vec3(0.11, 0.105, 0.10), crevice * 0.58);
+        surfAlbedo = mix(surfAlbedo, rCliff, smoothstep(0.05, 0.55, rockMask));
         surfRough  = mix(surfRough, 0.72, rockMask);
     }
 
@@ -2094,23 +2105,90 @@ void main() {
             surfRough  = mix(surfRough, 0.45, wakeMask);
         }
 
-        // 2. Stage 4: Towering 3D Volumetric Pyroclastic Smoke Column & Jagged Cellular Fire Tongues (cat == 6)
+        // 2. Stage 4: 3D Volumetric Pyroclastic Smoke, Fire, Munition Impacts & Tactical Flashes (cat == 6)
         if (cat == 6) {
             float stage = clamp(d1.x, 0.0, 1.0);
-            float rad = clamp(d1.w, 0.28, 1.15);
-            vec2 fireOrigin = d0.xy - vec2(0.0, 0.12);
+            float rad = clamp(d1.w, 0.14, 1.15);
+            vec2 fireOrigin = d0.xy - vec2(0.0, 0.06);
             vec2 relFire = groundCellXY - fireOrigin;
+            float distFire = length(relFire);
 
-            if (subType == 60) {
+            if (subType == 66) {
+                // ANIM_MOVE_FLASH: Crisp tactical emerald move-order confirmation ring on the ground
+                float ringR = mix(0.08, 0.24, stage);
+                float ring  = exp(-abs(distFire - ringR) * 42.0) * (1.0 - stage);
+                float dotC  = exp(-distFire * 28.0) * (1.0 - stage);
+                vfxAdditive += vec3(0.20, 1.0, 0.45) * (ring * 1.4 + dotC * 0.9);
+                continue;
+            }
+            if (subType == 12 || subType == 13) {
+                // ANIM_PIFF / ANIM_PIFFPIFF: Small-arms bullet impact spark & dust ricochet
+                if (distFire < 0.28) {
+                    float spark = exp(-distFire * 26.0) * (1.0 - stage * 0.85);
+                    float dust  = smoothstep(0.22, 0.03, distFire) * (1.0 - stage) * 0.35;
+                    vfxAdditive += vec3(1.0, 0.82, 0.38) * spark * 1.65;
+                    vfxSmokeAlpha = max(vfxSmokeAlpha, dust);
+                }
+                continue;
+            }
+            if (subType == 34 || (subType >= 39 && subType <= 54)) {
+                // ANIM_MUZZLE_FLASH / ANIM_SAM_* / ANIM_GUN_*: Compact directional weapon muzzle flash
+                if (distFire < 0.32) {
+                    float flash = exp(-distFire * 22.0) * (1.0 - stage * 0.80);
+                    vfxAdditive += vec3(1.0, 0.78, 0.32) * flash * 1.75;
+                }
+                continue;
+            }
+            if (subType == 11 || subType == 35 || subType == 55) {
+                // ANIM_SMOKE_PUFF / ANIM_SMOKE_M / ANIM_LZ_SMOKE: Soft expanding rocket/exhaust smoke puff (no fire)
+                float puffR = mix(0.12, 0.28, stage);
+                if (distFire < puffR * 1.35) {
+                    float sn = texture(uPbrTex, relFire * 0.65 + vec2(stage * 0.3)).a;
+                    float puff = smoothstep(puffR * 1.25, puffR * 0.15, distFire - (sn - 0.5) * 0.08) * (1.0 - stage * 0.85);
+                    if (puff * 0.68 > vfxSmokeAlpha) {
+                        vfxSmokeColor = vec3(0.24, 0.26, 0.28);
+                        vfxSmokeAlpha = puff * 0.68;
+                    }
+                }
+                continue;
+            }
+            if (subType == 56 || subType == 60) {
                 // GDI Ion Cannon Orbital Particle Beam
                 float beamW = abs(groundCellXY.x - d0.x);
                 float beam = exp(-beamW * 14.0) * step(groundCellXY.y, d0.y + 0.25) * (1.0 - stage * 0.6);
-                float core = smoothstep(1.1, 0.0, length(relFire) / rad);
+                float core = smoothstep(1.1, 0.0, distFire / max(rad, 0.35));
                 vfxAdditive += vec3(0.45, 0.82, 1.65) * (beam * 2.2 + core * 1.8);
                 continue;
             }
+            if ((subType >= 22 && subType <= 29) || subType == 72) {
+                // ANIM_CHEM_*: Tiberium / Visceroid emerald chemical cloud
+                if (distFire < rad * 1.25) {
+                    float chem = smoothstep(rad * 1.15, 0.04, distFire) * (1.0 - stage * 0.75);
+                    vfxAdditive += vec3(0.18, 0.95, 0.32) * chem * 1.35;
+                }
+                continue;
+            }
+            if (!isShowcase && (subType >= 0 && subType <= 10)) {
+                // Live gameplay shell / artillery / grenade / napalm impact explosion (ANIM_FBALL1..ANIM_NAPALM3)
+                float expR = rad * mix(0.45, 1.10, sqrt(stage));
+                if (distFire < expR * 1.45) {
+                    float nExp = fbm3(relFire * 5.5 - vec2(0.0, time * 2.8));
+                    float fireball = smoothstep(expR * 1.05, expR * 0.10, distFire - (nExp - 0.5) * 0.16) * pow(1.0 - stage, 0.65);
+                    float hotCore  = smoothstep(expR * 0.55, 0.0, distFire) * (1.0 - stage);
+                    vec3 expCol = mix(vec3(0.96, 0.26, 0.03), vec3(1.0, 0.78, 0.24), fireball);
+                    expCol = mix(expCol, vec3(1.0, 0.96, 0.80), hotCore);
+                    vfxAdditive += expCol * (fireball * 1.65 + hotCore * 1.25);
 
-            // A. Roaring Licking Flame Tongues & Glowing Structural Embers at Base (CnC-Ultra-Game.jpg)
+                    float smkRing = smoothstep(expR * 1.35, expR * 0.25, distFire - (nExp - 0.5) * 0.22) * smoothstep(0.08, 0.45, stage) * (1.0 - stage * 0.75);
+                    if (smkRing * 0.78 > vfxSmokeAlpha) {
+                        vfxSmokeColor = mix(vec3(0.04, 0.045, 0.05), vec3(0.18, 0.19, 0.21), stage);
+                        vfxSmokeAlpha = smkRing * 0.78;
+                    }
+                }
+                continue;
+            }
+
+            // A. Roaring Licking Flame Tongues & Glowing Structural Embers at Base (CnC-Ultra-Game.jpg & Persistent Fires)
             vec2 upDir = normalize(vec2(-0.42, -0.91));
             vec2 rightDir = vec2(-upDir.y, upDir.x);
             float fAlong = dot(relFire, upDir);
@@ -2142,7 +2220,7 @@ void main() {
             }
 
             // B. Towering Diagonal 3D Pyroclastic Cauliflower Smoke Column rising up-left from the fire!
-            // Built from 8 overlapping 3D spherical/ellipsoidal smoke billow puffs with true 3D surface normals
+            // Built from 14 overlapping 3D spherical/ellipsoidal smoke billow puffs with true 3D surface normals
             vec2 plumeDir = normalize(vec2(-0.50, -0.866));
             vec2 plumeOrtho = vec2(-plumeDir.y, plumeDir.x);
             vec2 relPlume = groundCellXY - (fireOrigin + vec2(-0.18, -0.14));
@@ -2162,7 +2240,7 @@ void main() {
                 // Continuous organic pyroclastic plume spine + 14 overlapping cauliflower billow lobes
                 for (int pk = 0; pk < 14; ++pk) {
                     float fi = float(pk) / 13.0;
-                    float puffAlong = mix(0.02, 4.35, pow(fi, 0.90));
+                    float puffAlong = mix(0.02, 4.35, pow(fi, 0.90)) * clamp(rad / 0.85, 0.35, 1.15);
                     float sideAlt   = (mod(float(pk), 2.0) * 2.0 - 1.0) * (0.10 + 0.24 * fi);
                     float puffSway  = sin(fi * 9.5 - time * 0.65 + float(pk) * 1.1) * (0.12 + 0.28 * fi) + sideAlt;
                     float puffRad   = mix(0.62, 1.48, pow(fi, 0.62)) * rad;
@@ -2222,17 +2300,17 @@ void main() {
                 vfxAdditive += vec3(1.0, 0.85, 0.85) * laserCore * 2.2 + vec3(1.0, 0.08, 0.12) * laserHalo * 1.4;
                 continue;
             }
-            // Tracer / Missile / Shell glow + contrail
-            vec2 bCenter = d0.xy - vec2(0.0, d0.z * 0.42 + 0.08);
+            // Single crisp projectile head + compact contrail aligned with point light at d0.xy - vec2(0.0, d0.z * 0.15)
+            vec2 bCenter = d0.xy - vec2(0.0, d0.z * 0.15);
             vec2 bDir = vec2(sin(d1.x), -cos(d1.x));
             vec2 relB = groundCellXY - bCenter;
             float along = dot(relB, -bDir);
-            float perp  = length(relB - (-bDir) * clamp(along, 0.0, 0.55));
-            if (perp < 0.18) {
-                float head = exp(-length(relB) * 28.0);
-                float trail = exp(-perp * 26.0) * smoothstep(0.55, 0.0, along) * step(0.0, along);
+            float perp  = length(relB - (-bDir) * clamp(along, 0.0, 0.38));
+            if (perp < 0.14) {
+                float head = exp(-length(relB) * 32.0);
+                float trail = exp(-perp * 30.0) * smoothstep(0.38, 0.0, along) * step(0.0, along);
                 vec3 pCol = (subType >= 4 && subType <= 7) ? vec3(1.0, 0.58, 0.18) : vec3(1.0, 0.85, 0.35);
-                vfxAdditive += pCol * (head * 2.0 + trail * 1.1);
+                vfxAdditive += pCol * (head * 1.85 + trail * 0.95);
             }
             continue;
         }
@@ -2271,7 +2349,7 @@ void main() {
             u -= max(d * 0.82, 0.005);
         }
 
-        // 4. Secondary Smoke, Fire & Muzzle Tracer Streaks for damaged / firing units
+        // 4. Secondary Smoke, Fire & Muzzle Flash for damaged / firing units
         if ((flags & 8) != 0) {
             vec2 smkOrigin = d0.xy - vec2(0.0, 0.16);
             vec2 sd = groundCellXY - smkOrigin;
@@ -2287,19 +2365,21 @@ void main() {
         }
         if ((flags & 2) != 0) {
             vec2 muzDir = vec2(sin(d1.y), -cos(d1.y));
-            vec2 muzPos = d0.xy + muzDir * 0.38 - vec2(0.0, 0.12);
+            vec2 muzPos = d0.xy + muzDir * 0.36 - vec2(0.0, 0.08);
             vec2 relM = groundCellXY - muzPos;
             float md = length(relM);
             if (md < 0.22) {
                 vfxAdditive += vec3(1.0, 0.78, 0.30) * exp(-md * 28.0) * 1.65;
             }
-            // High-velocity needle-sharp incandescent tracer streak downrange along firing vector
-            float alongT = dot(relM, muzDir);
-            float perpT  = length(relM - muzDir * clamp(alongT, 0.0, 1.85));
-            if (alongT > 0.0 && alongT < 1.85 && perpT < 0.07) {
-                float pulseT = fract(alongT * 1.3 - time * 6.5);
-                float streak = exp(-perpT * 68.0) * smoothstep(0.05, 0.28, pulseT) * smoothstep(0.78, 0.32, pulseT);
-                vfxAdditive += vec3(1.0, 0.85, 0.42) * streak * 2.1;
+            if (isShowcase) {
+                // Showcase-only synthetic tracer streak (in live gameplay, actual BulletClass cat==5 projectiles render)
+                float alongT = dot(relM, muzDir);
+                float perpT  = length(relM - muzDir * clamp(alongT, 0.0, 1.85));
+                if (alongT > 0.0 && alongT < 1.85 && perpT < 0.07) {
+                    float pulseT = fract(alongT * 1.3 - time * 6.5);
+                    float streak = exp(-perpT * 68.0) * smoothstep(0.05, 0.28, pulseT) * smoothstep(0.78, 0.32, pulseT);
+                    vfxAdditive += vec3(1.0, 0.85, 0.42) * streak * 2.1;
+                }
             }
         }
 
@@ -3110,31 +3190,17 @@ void main() {
     }
 
     // ------------------------------------------------------------------------
-    // 11. Composite Live Tactical Mouse Cursor (MOUSE.SHP + 4K Contrast Rim)
+    // 11. Composite Crisp 4K Tactical Mouse Cursor
     // ------------------------------------------------------------------------
-    if (curRect.z > curRect.x && curRect.w > curRect.y) {
-        if (vUV.x >= curRect.x && vUV.x < curRect.z && vUV.y >= curRect.y && vUV.y < curRect.w) {
-            if (palIdx != 0u) {
-                mapped = fbColor;
-            } else {
-                // High-contrast 4K dark drop-shadow rim around cursor sprite so it pops over any 3D surface
-                vec2 texel = 1.0 / vec2(textureSize(uFrameIndex, 0));
-                uint nE = texture(uFrameIndex, vUV + vec2( texel.x, 0.0)).r & 0xFFu;
-                uint nW = texture(uFrameIndex, vUV + vec2(-texel.x, 0.0)).r & 0xFFu;
-                uint nS = texture(uFrameIndex, vUV + vec2(0.0,  texel.y)).r & 0xFFu;
-                uint nN = texture(uFrameIndex, vUV + vec2(0.0, -texel.y)).r & 0xFFu;
-                if (nE != 0u || nW != 0u || nS != 0u || nN != 0u) {
-                    mapped = mix(mapped, vec3(0.02, 0.06, 0.03), 0.82);
-                }
-            }
-        }
-    } else if (curRect.x > 0.0 && curRect.y > 0.0) {
-        // Procedural 4K Phosphor Tactical Arrow fallback if software cursor bitmap is not yet set
-        vec2 cRel = (vUV - curRect.xy) * vec2(640.0, 400.0) / 16.0;
-        if (cRel.x >= -0.2 && cRel.x <= 1.1 && cRel.y >= -0.2 && cRel.y <= 1.2) {
-            bool inArrow = (cRel.x >= 0.0 && cRel.y >= 0.0 && cRel.x <= cRel.y * 0.72 && (cRel.x + cRel.y * 0.65) <= 0.85);
-            if (inArrow) {
-                mapped = vec3(0.55, 1.0, 0.65);
+    if (curRect.z > curRect.x && curRect.w > curRect.y && !isShowcase) {
+        vec2 cPx = (vUV - curRect.xy) * vec2(640.0, 400.0);
+        if (cPx.x >= -1.0 && cPx.x <= 14.0 && cPx.y >= -1.0 && cPx.y <= 16.0) {
+            bool inOuter = (cPx.x >= -0.8 && cPx.y >= -0.8 && cPx.x <= cPx.y * 0.78 + 1.0 && (cPx.x + cPx.y * 0.62) <= 11.5);
+            bool inInner = (cPx.x >= 0.4 && cPx.y >= 0.6 && cPx.x <= cPx.y * 0.72 && (cPx.x + cPx.y * 0.62) <= 9.8);
+            if (inInner) {
+                mapped = mix(vec3(0.92, 0.98, 1.0), vec3(0.35, 0.95, 0.58), clamp((cPx.x + cPx.y) / 14.0, 0.0, 1.0));
+            } else if (inOuter) {
+                mapped = vec3(0.04, 0.07, 0.09);
             }
         }
     }

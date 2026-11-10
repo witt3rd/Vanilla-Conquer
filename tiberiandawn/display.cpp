@@ -2483,8 +2483,12 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
     int tacW = Lepton_To_Pixel(TacLeptonWidth);
     int tacH = Lepton_To_Pixel(TacLeptonHeight);
     if (tacW <= 0) tacW = 480;
-    if (tacW >= 600) tacW = gw; // Fill full 640 width when sidebar is closed
     if (tacH <= 0) tacH = 384;
+    // Note: In Live Gameplay Mode, perspUV == tacUV, so tacUV.x * cellsW = (x / tacW) * (tacW / 24.0) = x / 24.0
+    // is invariant to tacW! Expanding tacW to gw when the sidebar is closed eliminates the 16px right border
+    // while keeping 0.000px exact alignment with C++ Coord_To_Pixel / Pixel_To_Coord.
+    if (tacW >= 600) tacW = gw;
+    if (TacPixelY + tacH >= 384) tacH = gh - TacPixelY;
 
     if (std::getenv("CNC_AUTO_SCENARIO") != nullptr) {
         static int s_autoFrames = 0;
@@ -2773,24 +2777,26 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
             static_cast<float>(u->Class->IsTurretEquipped ? u->SecondaryFacing.Current() : u->PrimaryFacing.Current()) *
             kDirToRad;
 
-        // Stage 5: Local Continuous Separation / RVO-lite steering away from nearby ground vehicles
-        float sepX = 0.0f, sepY = 0.0f;
-        for (int j = 0; j < Units.Count(); ++j) {
-            if (j == i) continue;
-            UnitClass* o = Units.Ptr(j);
-            if (!o || !o->IsActive || o->IsInLimbo) continue;
-            float dx = rawGx - static_cast<float>(Coord_X(o->Center_Coord())) / 256.0f;
-            float dy = rawGy - static_cast<float>(Coord_Y(o->Center_Coord())) / 256.0f;
-            float d2 = dx * dx + dy * dy;
-            if (d2 > 1e-5f && d2 < 0.36f) {
-                float d = std::sqrt(d2);
-                float push = (0.60f - d) * 0.18f;
-                sepX += (dx / d) * push;
-                sepY += (dy / d) * push;
+        // Stage 5: Local Continuous Separation / RVO-lite steering only while actively driving
+        if (u->IsDriving) {
+            float sepX = 0.0f, sepY = 0.0f;
+            for (int j = 0; j < Units.Count(); ++j) {
+                if (j == i) continue;
+                UnitClass* o = Units.Ptr(j);
+                if (!o || !o->IsActive || o->IsInLimbo) continue;
+                float dx = rawGx - static_cast<float>(Coord_X(o->Center_Coord())) / 256.0f;
+                float dy = rawGy - static_cast<float>(Coord_Y(o->Center_Coord())) / 256.0f;
+                float d2 = dx * dx + dy * dy;
+                if (d2 > 1e-5f && d2 < 0.25f) {
+                    float d = std::sqrt(d2);
+                    float push = (0.50f - d) * 0.12f;
+                    sepX += (dx / d) * push;
+                    sepY += (dy / d) * push;
+                }
             }
+            rawGx += std::max(-0.06f, std::min(0.06f, sepX));
+            rawGy += std::max(-0.06f, std::min(0.06f, sepY));
         }
-        rawGx += sepX;
-        rawGy += sepY;
 
         if (i < 256) {
             SmoothKinematicState& st = s_smoothUnits[i];
@@ -2990,7 +2996,7 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
             auxY = toLocalCellY(srcC);
             addPointLight(wx, wy, 0.25f, 3.5f, 1.0f, 0.12f, 0.16f, 2.8f);
         } else {
-            addPointLight(wx, wy, altCells + 0.18f, 2.0f, 1.0f, 0.72f, 0.25f, 1.4f);
+            addPointLight(wx, wy - altCells * 0.15f, altCells + 0.14f, 1.1f, 1.0f, 0.72f, 0.25f, 1.0f);
         }
 
         ubo.ent_data0[entCount][0] = wx;
@@ -3018,13 +3024,20 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         int subType = std::max(0, std::min(127, static_cast<int>(*anim)));
         int packedType = 6 | (subType << 3);
 
-        float rad = 0.35f;
-        if (subType == ANIM_FBALL1 || subType == ANIM_ART_EXP1 || subType == ANIM_NAPALM3 ||
-            subType == ANIM_ION_CANNON || subType == ANIM_ATOM_BLAST) {
-            rad = 0.75f;
+        float stage = std::min(1.0f, std::max(0.0f, anim->Normalized_Stage()));
+
+        float rad = 0.32f;
+        if (subType == ANIM_PIFF || subType == ANIM_PIFFPIFF || subType == ANIM_MUZZLE_FLASH ||
+            subType == ANIM_MOVE_FLASH || (subType >= ANIM_SAM_N && subType <= ANIM_GUN_NW)) {
+            rad = 0.15f;
+        } else if (subType == ANIM_SMOKE_PUFF || subType == ANIM_SMOKE_M || subType == ANIM_LZ_SMOKE) {
+            rad = 0.22f;
+        } else if (subType == ANIM_FBALL1 || subType == ANIM_ART_EXP1 || subType == ANIM_NAPALM3 ||
+                   subType == ANIM_ION_CANNON || subType == ANIM_ATOM_BLAST) {
+            rad = 0.72f;
         } else if (subType == ANIM_FRAG1 || subType == ANIM_FRAG2 || subType == ANIM_NAPALM2 ||
                    subType == ANIM_BURN_BIG || subType == ANIM_ON_FIRE_BIG) {
-            rad = 0.52f;
+            rad = 0.50f;
         }
 
         ubo.ent_data0[entCount][0] = wx;
@@ -3032,7 +3045,7 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         ubo.ent_data0[entCount][2] = 0.15f;
         ubo.ent_data0[entCount][3] = static_cast<float>(packedType);
 
-        ubo.ent_data1[entCount][0] = 0.25f;
+        ubo.ent_data1[entCount][0] = stage;
         ubo.ent_data1[entCount][1] = 0.0f;
         ubo.ent_data1[entCount][2] = 0.99f;
         ubo.ent_data1[entCount][3] = rad;
@@ -3041,9 +3054,10 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         if (subType == ANIM_ION_CANNON) {
             addPointLight(wx, wy, 0.55f, 5.5f, 0.45f, 0.82f, 1.0f, 3.6f);
         } else if (subType >= ANIM_CHEM_N && subType <= ANIM_CHEM_NW) {
-            addPointLight(wx, wy, 0.25f, 2.5f, 0.15f, 0.98f, 0.35f, 1.8f);
-        } else if (subType != ANIM_SMOKE_PUFF && subType != ANIM_SMOKE_M && subType != ANIM_LZ_SMOKE) {
-            addPointLight(wx, wy, 0.35f, rad * 5.2f, 1.0f, 0.52f, 0.14f, 2.4f);
+            addPointLight(wx, wy, 0.25f, 2.2f, 0.15f, 0.98f, 0.35f, 1.6f);
+        } else if (subType != ANIM_SMOKE_PUFF && subType != ANIM_SMOKE_M && subType != ANIM_LZ_SMOKE &&
+                   subType != ANIM_PIFF && subType != ANIM_PIFFPIFF && subType != ANIM_MOVE_FLASH) {
+            addPointLight(wx, wy, 0.28f, rad * 3.8f, 1.0f, 0.52f, 0.14f, 1.6f * (1.0f - stage * 0.5f));
         }
     }
 
@@ -3849,7 +3863,8 @@ CELL DisplayClass::Calculated_Cell(SourceType dir, HousesType house)
  *=============================================================================================*/
 static bool should_exclude_from_selection(ObjectClass* obj)
 {
-    return (obj->What_Am_I() == RTTI_UNIT) && (((UnitClass*)obj)->Class->IsToHarvest || *((UnitClass*)obj) == UNIT_MCV);
+    return (obj->What_Am_I() == RTTI_UNIT) && ((UnitClass*)obj)->Class->IsToHarvest
+           && (((UnitClass*)obj)->IsHarvesting || ((UnitClass*)obj)->Mission == MISSION_HARVEST);
 }
 
 void DisplayClass::Select_These(COORDINATE coord1, COORDINATE coord2, bool additive)
