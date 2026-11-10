@@ -15,6 +15,8 @@ layout(set = 0, binding = 4) uniform Tactical3DUBO {
     vec4 view_params2;        // x=cells_high, y=origin_cell_x, z=origin_cell_y, w=theater
     vec4 view_params3;        // x=entity_count, y=light_count, z=player_house, w=palette_fade
     vec4 overlay_rects[4];    // [0]=rubber_band, [1]=dialog_rect, [2]=tooltip_rect, [3]=aux_ui
+    vec4 hud_telemetry[2];    // [0]=(credits, power, drain, cur_units), [1]=(max_units, tiberium, sel_type, sel_hp)
+    uvec4 hud_chars[4];       // [0..1]=selected unit name (32 chars), [2..3]=selected unit role (32 chars)
     uvec4 cell_grid[150];     // 30 x 20 cells = 600 uints
     vec4 ent_data0[128];      // x=wx, y=wy, z=alt, w=packed_type
     vec4 ent_data1[128];      // x=hull_yaw, y=turret_yaw, z=health_and_flags, w=footprint_and_aux
@@ -157,9 +159,11 @@ float evaluateTerrainHeight(vec2 worldCell, vec2 globalCell, out vec4 fieldsOut)
     float microH = (fbm4(globalCell * 1.8) - 0.5) * 0.065;
     microH *= (1.0 - roadField * 0.85) * (1.0 - waterField);
 
-    // Rock cliffs & escarpments rise 0.42 cell units (~10m) with stratified terraces
-    float strata = fbm4(globalCell * 5.5);
-    float cliffH = rockField * (0.34 + 0.14 * strata);
+    // Rock cliffs & coastal crags rise ~12m with stepped shale/limestone terraces
+    float strata = fbm4(globalCell * 5.2);
+    float terrace = floor(strata * 4.0) * 0.18 + smoothstep(0.15, 0.85, fract(strata * 4.0)) * 0.28;
+    float cragDetail = (noise2D(globalCell * 16.0) - 0.5) * 0.06;
+    float cliffH = rockField * (0.36 + 0.18 * terrace + cragDetail);
 
     // Road crown
     float roadH = roadField * 0.018;
@@ -251,16 +255,16 @@ vec2 rot2D(vec2 p, float a) {
 }
 
 // ----------------------------------------------------------------------------
-// House Faction PBR Trim Colors
+// House Faction PBR Trim Colors (Weathered Military Armor Palette)
 // ----------------------------------------------------------------------------
 vec3 getHouseTrimColor(int houseId) {
-    if (houseId == 0) return vec3(0.92, 0.72, 0.22); // GDI Ion-Gold
-    if (houseId == 1) return vec3(0.88, 0.14, 0.14); // Nod Laser-Crimson
-    if (houseId == 2) return vec3(0.75, 0.73, 0.68); // Neutral Titanium-Tan
-    if (houseId == 3) return vec3(0.22, 0.68, 0.85); // Multi Teal-Blue
-    if (houseId == 4) return vec3(0.92, 0.45, 0.12); // Multi Amber-Orange
-    if (houseId == 5) return vec3(0.20, 0.78, 0.32); // Multi Emerald
-    return vec3(0.55, 0.58, 0.62);                   // Steel Gray
+    if (houseId == 0) return vec3(0.58, 0.51, 0.35); // GDI Weathered Desert-Olive / Sand-Gold
+    if (houseId == 1) return vec3(0.52, 0.17, 0.16); // Nod Weathered Crimson / Urban Gunmetal
+    if (houseId == 2) return vec3(0.46, 0.45, 0.41); // Neutral Weathered Field-Drab
+    if (houseId == 3) return vec3(0.24, 0.46, 0.56); // Multi Naval Slate-Blue
+    if (houseId == 4) return vec3(0.64, 0.38, 0.18); // Multi Ochre-Amber
+    if (houseId == 5) return vec3(0.24, 0.48, 0.28); // Multi Tactical Olive
+    return vec3(0.42, 0.45, 0.48);                   // Gunmetal Gray
 }
 
 // ----------------------------------------------------------------------------
@@ -913,6 +917,219 @@ vec3 shadeArmoredMetalPlate(
 }
 
 // ----------------------------------------------------------------------------
+// 4K Procedural 3x5 Bitmap Font, Vector Icons & 3D Unit Portrait Studio
+// ----------------------------------------------------------------------------
+int getGlyphMask3x5(int ch) {
+    // Uppercase ASCII fold
+    if (ch >= 97 && ch <= 122) ch -= 32;
+    switch (ch) {
+        case 48: return 31599; // '0'
+        case 49: return 11415; // '1'
+        case 50: return 29671; // '2'
+        case 51: return 29647; // '3'
+        case 52: return 23497; // '4'
+        case 53: return 31183; // '5'
+        case 54: return 31215; // '6'
+        case 55: return 29266; // '7'
+        case 56: return 31727; // '8'
+        case 57: return 31695; // '9'
+        case 65: return 11245; // 'A'
+        case 66: return 27566; // 'B'
+        case 67: return 31015; // 'C'
+        case 68: return 27502; // 'D'
+        case 69: return 31207; // 'E'
+        case 70: return 31204; // 'F'
+        case 71: return 31087; // 'G'
+        case 72: return 23533; // 'H'
+        case 73: return 29847; // 'I'
+        case 74: return 4719;  // 'J'
+        case 75: return 23469; // 'K'
+        case 76: return 18727; // 'L'
+        case 77: return 24557; // 'M'
+        case 78: return 24429; // 'N'
+        case 79: return 31599; // 'O'
+        case 80: return 31716; // 'P'
+        case 81: return 31611; // 'Q'
+        case 82: return 31661; // 'R'
+        case 83: return 31183; // 'S'
+        case 84: return 29842; // 'T'
+        case 85: return 23407; // 'U'
+        case 86: return 23402; // 'V'
+        case 87: return 23549; // 'W'
+        case 88: return 23213; // 'X'
+        case 89: return 23186; // 'Y'
+        case 90: return 29351; // 'Z'
+        case 58: return 1040;  // ':'
+        case 37: return 21157; // '%'
+        case 47: return 4772;  // '/'
+        case 43: return 1488;  // '+'
+        case 45: return 448;   // '-'
+        case 46: return 2;     // '.'
+        default: return 0;
+    }
+}
+
+float sampleGlyph3x5(int ch, vec2 relPx, float scale) {
+    vec2 g = relPx / scale;
+    if (g.x < 0.0 || g.x >= 3.0 || g.y < 0.0 || g.y >= 5.0) return 0.0;
+    int ix = clamp(int(floor(g.x)), 0, 2);
+    int iy = clamp(int(floor(g.y)), 0, 4);
+    int mask = getGlyphMask3x5(ch);
+    int bitIdx = (4 - iy) * 3 + (2 - ix);
+    return float((mask >> bitIdx) & 1);
+}
+
+int unpackHudChar(int bankOffset, int charIdx) {
+    if (charIdx < 0 || charIdx >= 32) return 0;
+    int wordIdx = charIdx >> 2;
+    int byteIdx = charIdx & 3;
+    uint w = uTac.hud_chars[bankOffset + (wordIdx >> 2)][wordIdx & 3];
+    return int((w >> uint(byteIdx * 8)) & 255u);
+}
+
+float drawHudPackedStr(vec2 px, vec2 originPx, int bankOffset, int maxChars, float scale) {
+    vec2 rel = px - originPx;
+    float stepX = 4.0 * scale;
+    if (rel.x < 0.0 || rel.y < 0.0 || rel.y >= 5.0 * scale) return 0.0;
+    int idx = int(floor(rel.x / stepX));
+    if (idx < 0 || idx >= maxChars) return 0.0;
+    int ch = unpackHudChar(bankOffset, idx);
+    if (ch <= 32) return 0.0;
+    return sampleGlyph3x5(ch, vec2(rel.x - float(idx) * stepX, rel.y), scale);
+}
+
+// Left-aligned positive integer renderer (up to 6 digits, with optional leading '+' sign)
+float drawHudNumber(vec2 px, vec2 originPx, int val, bool showPlus, float scale) {
+    vec2 rel = px - originPx;
+    float stepX = 4.0 * scale;
+    if (rel.x < 0.0 || rel.y < 0.0 || rel.y >= 5.0 * scale) return 0.0;
+
+    int v = max(0, val);
+    int digits[7];
+    int count = 0;
+    if (v == 0) {
+        digits[0] = 48;
+        count = 1;
+    } else {
+        int tmp = v;
+        int rev[6];
+        int rc = 0;
+        for (int i = 0; i < 6; ++i) {
+            if (tmp <= 0) break;
+            rev[rc++] = 48 + (tmp % 10);
+            tmp /= 10;
+        }
+        if (showPlus) {
+            digits[count++] = 43; // '+'
+        }
+        for (int i = rc - 1; i >= 0; --i) {
+            digits[count++] = rev[i];
+        }
+    }
+
+    int idx = int(floor(rel.x / stepX));
+    if (idx < 0 || idx >= count) return 0.0;
+    return sampleGlyph3x5(digits[idx], vec2(rel.x - float(idx) * stepX, rel.y), scale);
+}
+
+// Ray-marches a live 3D close-up studio portrait of the selected unit/structure for the Bottom-Left HUD Card
+vec3 renderUnitPortrait3D(vec2 uvBox, int selPackedType, float time) {
+    // Background: moody coastal cliff + twilight sky horizon matching CnC-Ultra-Game.jpg
+    vec3 skyBg = mix(vec3(0.24, 0.29, 0.34), vec3(0.11, 0.14, 0.18), clamp(uvBox.y * 1.6, 0.0, 1.0));
+    vec3 groundBg = mix(vec3(0.18, 0.17, 0.15), vec3(0.10, 0.11, 0.12), clamp((uvBox.y - 0.45) * 2.0, 0.0, 1.0));
+    vec3 bgCol = (uvBox.y < 0.48) ? skyBg : groundBg;
+
+    int cat = selPackedType & 7;
+    int subType = (selPackedType >> 3) & 127;
+    int houseId = (selPackedType >> 10) & 7;
+
+    // Studio camera setup looking at origin (0, 0, 0.16) at a dramatic 3/4 front-left angle
+    float zoom = (cat == 1) ? 1.55 : ((cat == 2) ? 0.55 : 0.85);
+    vec2 pScreen = (uvBox - vec2(0.5, 0.56)) * vec2(1.0, -1.0) * zoom;
+
+    vec3 camForward = normalize(vec3(-0.48, -0.76, -0.44));
+    vec3 camRight   = normalize(cross(camForward, vec3(0.0, 0.0, 1.0)));
+    vec3 camUp      = cross(camRight, camForward);
+
+    vec3 target = vec3(0.0, 0.0, (cat == 1) ? 0.22 : ((cat == 2) ? 0.14 : 0.16));
+    vec3 ro = target - camForward * 1.45 + camRight * pScreen.x + camUp * pScreen.y;
+    vec3 rd = camForward;
+
+    // Construct synthetic entity data for evaluateSingleEntitySDF at origin facing South-West
+    float yaw = 2.55 + sin(time * 0.65) * 0.12;
+    float turYaw = yaw - 0.28 + sin(time * 1.1) * 0.18;
+    vec4 d0 = vec4(0.0, 0.0, 0.0, float(selPackedType));
+    vec4 d1 = vec4(yaw, turYaw, 0.99, float(2 | (2 << 3)));
+
+    float t = 0.65;
+    int hitMat = 0;
+    vec3 hitLoc = vec3(0.0);
+    vec3 hitP = vec3(0.0);
+    for (int i = 0; i < 24; ++i) {
+        vec3 p = ro + rd * t;
+        // Ground plinth plane at z = 0
+        float dGround = p.z;
+        int mId;
+        vec3 lCoord;
+        float dEnt = evaluateSingleEntitySDF(p, d0, d1, time, mId, lCoord);
+        float d = min(dEnt, dGround);
+        if (d < 0.004) {
+            hitP = p;
+            if (dEnt <= dGround) {
+                hitMat = mId;
+                hitLoc = lCoord;
+            } else {
+                hitMat = 99; // Studio road/rock plinth
+            }
+            break;
+        }
+        t += max(d * 0.85, 0.006);
+        if (t > 2.4) break;
+    }
+
+    if (hitMat == 0) return bgCol;
+
+    if (hitMat == 99) {
+        float distR = length(hitP.xy);
+        float shadow = smoothstep(0.08, 0.42, distR);
+        float nG = noise2D(hitP.xy * 18.0);
+        vec3 plinth = mix(vec3(0.20, 0.19, 0.17), vec3(0.28, 0.26, 0.23), nG) * (0.42 + 0.58 * shadow);
+        return mix(plinth, bgCol, smoothstep(0.45, 0.85, distR));
+    }
+
+    float eps = 0.005;
+    int dm;
+    vec3 dl;
+    float d00 = evaluateSingleEntitySDF(hitP, d0, d1, time, dm, dl);
+    vec3 N = normalize(vec3(
+        evaluateSingleEntitySDF(hitP + vec3(eps, 0.0, 0.0), d0, d1, time, dm, dl) - d00,
+        evaluateSingleEntitySDF(hitP + vec3(0.0, eps, 0.0), d0, d1, time, dm, dl) - d00,
+        evaluateSingleEntitySDF(hitP + vec3(0.0, 0.0, eps), d0, d1, time, dm, dl) - d00
+    ));
+
+    vec3 houseCol = getHouseTrimColor(houseId);
+    float grit = noise2D(hitLoc.xy * 26.0 + hitLoc.z * 14.0);
+    vec3 alb = houseCol * (0.85 + 0.30 * grit);
+    if (hitMat == 20) alb = vec3(0.15, 0.16, 0.17) * (0.8 + 0.4 * grit);
+    else if (hitMat == 22) alb = mix(houseCol * 0.78, vec3(0.28, 0.30, 0.32), 0.55) * (0.88 + 0.24 * grit);
+    else if (hitMat == 23) alb = vec3(0.18, 0.92, 0.38);
+    else if (hitMat == 24) alb = vec3(0.36, 0.37, 0.38);
+
+    vec3 Lkey = normalize(vec3(-0.55, -0.45, 0.70));
+    vec3 Lrim = normalize(vec3(0.65, 0.45, 0.60));
+    vec3 V = -rd;
+    vec3 H = normalize(Lkey + V);
+
+    float diff = max(dot(N, Lkey), 0.0);
+    float rim  = max(dot(N, Lrim), 0.0);
+    float spec = pow(max(dot(N, H), 0.0), 28.0);
+
+    vec3 col = alb * (0.28 + 0.78 * diff + 0.25 * rim) + vec3(0.95, 0.88, 0.75) * spec * 0.35;
+    if (hitMat == 23) col += vec3(0.12, 0.85, 0.32) * 0.65;
+    return clamp(col, 0.0, 1.0);
+}
+
+// ----------------------------------------------------------------------------
 // Main Native-4K 3D Tactical Battlefield & UI Compositor
 // ----------------------------------------------------------------------------
 void main() {
@@ -920,8 +1137,9 @@ void main() {
     vec4 tacRect = vec4(uTac.view_params0.y, uTac.view_params0.z, uTac.view_params0.w, uTac.view_params1.x);
     float fade = clamp(uTac.view_params3.w, 0.0, 1.0);
 
-    // 1. Check if pixel is in Top Tab Bar, Right Sidebar, Modal Dialog Box, or Tooltip Box
-    bool inTacViewport = (vUV.x >= tacRect.x && vUV.x < tacRect.z && vUV.y >= tacRect.y && vUV.y < tacRect.w);
+    // 1. Check if pixel is in Right Sidebar, Modal Dialog Box, or Tooltip Box
+    // Extend 3D battlefield all the way to the top edge (vUV.y >= 0.0) to match CnC-Ultra-Game.jpg
+    bool inTacViewport = (vUV.x >= tacRect.x && vUV.x < tacRect.z && vUV.y < tacRect.w);
 
     vec4 dlgRect = uTac.overlay_rects[1];
     bool inDialog = (dlgRect.z > dlgRect.x && vUV.x >= dlgRect.x && vUV.x <= dlgRect.z && vUV.y >= dlgRect.y && vUV.y <= dlgRect.w);
@@ -938,7 +1156,7 @@ void main() {
 
     // Top rows of tactical view: check if multiplayer/system message text is drawn (packed in fract(view_params3.z))
     float msgV1 = fract(uTac.view_params3.z);
-    bool inMsgText = (inTacViewport && msgV1 > 0.001 && vUV.y < msgV1 && palIdx != 0u && palIdx != 12u);
+    bool inMsgText = (inTacViewport && msgV1 > 0.001 && vUV.y >= tacRect.y && vUV.y < msgV1 && palIdx != 0u && palIdx != 12u);
 
     if (!inTacViewport || inDialog || inTooltip || inMsgText) {
         vec2 px = vUV * vec2(640.0, 400.0);
@@ -1107,123 +1325,108 @@ void main() {
             }
         }
         // ====================================================================
-        // C. RIGHT TACTICAL COMMAND SIDEBAR (Radar, Repair/Sell/Map, Power, Cameos)
+        // C. RIGHT TACTICAL MINIMAP & DARK-SLATE COMMAND DOCK (CnC-Ultra-Game.jpg)
         // ====================================================================
         else if (!inTacViewport && px.x >= 479.5) {
-            vec2 plateN = fbGrad * 1.8;
+            vec2 plateN = fbGrad * 1.4;
             float ao = 1.0;
 
-            // Left structural armor rail along x = 480..484
-            if (px.x < 484.0) {
-                plateN.x -= (484.0 - px.x) * 0.45;
-            } else if (px.x > 636.0) {
-                plateN.x += (px.x - 636.0) * 0.45;
-            }
+            // Sleek Dark Charcoal-Slate (#16191d) & Brushed Gunmetal Border (#383e44) palette
+            vec3 slateBg     = vec3(0.086, 0.098, 0.114);
+            vec3 slateSlot   = vec3(0.110, 0.125, 0.145);
+            vec3 slateBorder = vec3(0.220, 0.245, 0.275);
 
-            // Horizontal module divider seams at y = 155, y = 180, y = 373
-            float dSeam = min(min(abs(px.y - 155.0), abs(px.y - 180.0)), abs(px.y - 373.5));
-            if (dSeam < 1.6) {
-                plateN.y += (px.y < 155.0 || (px.y > 178.0 && px.y < 180.0) || (px.y > 371.5 && px.y < 373.5)) ? 1.1 : -1.1;
-                ao *= 0.55;
+            // Outer left metallic frame line along x = 480..481.5
+            if (px.x < 481.8) {
+                uiCol = slateBorder * 1.15;
             }
+            // 1. TOP-RIGHT FRAMED TACTICAL MINIMAP (y in [0, 155))
+            else if (px.y < 155.0) {
+                bool inRadarScreen = (px.x >= 492.0 && px.x < 628.0 && px.y >= 17.0 && px.y < 149.0);
+                vec2 rBox = max(vec2(492.0 - px.x, 17.0 - px.y), vec2(px.x - 628.0, px.y - 149.0));
+                float dScreen = length(max(rBox, vec2(0.0)));
 
-            // 1. UPPER RADAR MODULE (y in [16, 155))
-            if (px.y < 155.0) {
-                bool inRadarScreen = (px.x >= 496.0 && px.x < 624.0 && px.y >= 21.0 && px.y < 149.0);
                 if (inRadarScreen) {
-                    vec2 rUV = (px - vec2(496.0, 21.0)) / 128.0;
-                    vec2 rCenter = rUV - vec2(0.5);
-                    float rEdge = min(min(rUV.x, 1.0 - rUV.x), min(rUV.y, 1.0 - rUV.y)) * 128.0;
-                    float innerShadow = smoothstep(0.0, 3.5, rEdge);
+                    vec2 rUV = (px - vec2(492.0, 17.0)) / vec2(136.0, 132.0);
+                    float rEdge = min(min(rUV.x, 1.0 - rUV.x) * 136.0, min(rUV.y, 1.0 - rUV.y) * 132.0);
+                    float innerShadow = smoothstep(0.0, 3.0, rEdge);
 
-                    // Sweeping radar phosphor line & subtle tactical grid
-                    float angle = atan(rCenter.y, rCenter.x);
-                    float sweep = fract((angle + PI) / (2.0 * PI) - time * 0.28);
-                    float sweepGlow = pow(sweep, 6.0) * 0.22;
-                    vec2 gridF = abs(fract(rUV * 8.0) - 0.5);
-                    float reticle = smoothstep(0.47, 0.50, max(gridF.x, gridF.y)) * 0.08;
+                    // Subtle tactical grid & coastal satellite map aesthetic
+                    vec2 gridF = abs(fract(rUV * 6.0) - 0.5);
+                    float reticle = smoothstep(0.47, 0.50, max(gridF.x, gridF.y)) * 0.07;
+                    float mapTopo = fbm3(rUV * 7.5 + vec2(2.1, 4.7));
+                    vec3 satCoast = mix(
+                        vec3(0.035, 0.110, 0.165),
+                        mix(vec3(0.18, 0.21, 0.15), vec3(0.28, 0.26, 0.22), smoothstep(0.45, 0.75, mapTopo)),
+                        smoothstep(0.36, 0.52, mapTopo)
+                    );
 
-                    if (isNeutralStone) {
-                        // Replace flat gray background in inactive radar with dark CRT glass + reticle
-                        uiCol = (vec3(0.018, 0.055, 0.028) + vec3(0.06, 0.28, 0.12) * (sweepGlow + reticle)) * crtScan;
-                    } else if (lum <= 0.03) {
-                        // Unmapped/black radar background -> Smoked CRT phosphor glass with radar sweep
-                        uiCol = (vec3(0.012, 0.042, 0.022) + vec3(0.05, 0.25, 0.11) * (sweepGlow + reticle)) * crtScan;
+                    if (isNeutralStone || lum <= 0.035) {
+                        uiCol = satCoast + vec3(0.12, 0.20, 0.24) * reticle;
                     } else {
-                        // Active radar minimap terrain/units or GDI/Nod radar emblem
-                        uiCol = fbColor * crtScan * 1.18 + vec3(0.04, 0.18, 0.08) * sweepGlow;
+                        uiCol = mix(satCoast, fbColor * 1.18, 0.85);
                     }
-                    // Curved CRT glass specular reflection
-                    float glassSpec = exp(-length(rUV - vec2(0.32, 0.28)) * 4.2) * 0.12;
-                    uiCol = (uiCol + vec3(0.18, 0.32, 0.22) * glassSpec) * (0.55 + 0.45 * innerShadow);
+                    // Crisp white camera viewport rectangle indicator on minimap
+                    vec2 vBox = abs(rUV - vec2(0.48, 0.52)) - vec2(0.18, 0.14);
+                    float dCamBox = abs(max(vBox.x, vBox.y));
+                    if (dCamBox < 0.012) {
+                        uiCol = mix(uiCol, vec3(0.88, 0.92, 0.96), 0.75);
+                    }
+                    uiCol *= (0.65 + 0.35 * innerShadow);
+                } else if (dScreen < 1.8) {
+                    uiCol = slateBorder * 1.25;
                 } else {
-                    // Outer Radar Heavy Titanium Bezel
-                    vec2 rBox = max(vec2(496.0 - px.x, 21.0 - px.y), vec2(px.x - 624.0, px.y - 149.0));
-                    float dScreen = length(max(rBox, vec2(0.0)));
-                    if (dScreen < 4.5) {
-                        plateN += normalize(px - vec2(560.0, 85.0)) * 1.25;
+                    uiCol = shadeArmoredMetalPlate(px, plateN * 0.6, slateBg, 0.38, 0.92, mouseUV, time);
+                    // Top-Right OPTIONS / MENU header caption in [y < 14]
+                    if (px.y < 14.0 && (greenDom > 0.04 || (lum > 0.35 && !isNeutralStone))) {
+                        uiCol = vec3(0.82, 0.86, 0.90);
                     }
-                    addHexRivet(px, vec2(488.0, 23.0), 2.2, plateN, ao);
-                    addHexRivet(px, vec2(632.0, 23.0), 2.2, plateN, ao);
-                    addHexRivet(px, vec2(488.0, 147.0), 2.2, plateN, ao);
-                    addHexRivet(px, vec2(632.0, 147.0), 2.2, plateN, ao);
-                    uiCol = shadeArmoredMetalPlate(px, plateN, vec3(0.15, 0.17, 0.185), 0.32, ao, mouseUV, time);
                 }
             }
-            // 2. MIDDLE COMMAND BUTTON STRIP (Repair, Sell, Map: y in [155, 180))
+            // 2. MIDDLE TACTICAL COMMAND STRIP (Repair, Sell, Map: y in [155, 180))
             else if (px.y < 180.0) {
-                bool inBtn1 = (px.x >= 484.0 && px.x < 533.0 && px.y >= 159.0 && px.y < 178.0);
-                bool inBtn2 = (px.x >= 537.0 && px.x < 586.0 && px.y >= 159.0 && px.y < 178.0);
-                bool inBtn3 = (px.x >= 590.0 && px.x < 639.0 && px.y >= 159.0 && px.y < 178.0);
+                bool inBtn1 = (px.x >= 484.0 && px.x < 533.0 && px.y >= 158.0 && px.y < 177.0);
+                bool inBtn2 = (px.x >= 537.0 && px.x < 586.0 && px.y >= 158.0 && px.y < 177.0);
+                bool inBtn3 = (px.x >= 590.0 && px.x < 638.0 && px.y >= 158.0 && px.y < 177.0);
 
                 if (inBtn1 || inBtn2 || inBtn3) {
                     float bx0 = inBtn1 ? 484.0 : (inBtn2 ? 537.0 : 590.0);
-                    vec2 bMin = vec2(bx0, 159.0);
-                    vec2 bMax = vec2(bx0 + 49.0, 178.0);
+                    vec2 bMin = vec2(bx0, 158.0);
+                    vec2 bMax = vec2(bx0 + 48.0, 177.0);
                     vec2 bEdge = min(px - bMin, bMax - px);
                     float edgeD = min(bEdge.x, bEdge.y);
-                    if (edgeD < 2.2) {
-                        plateN.x += (px.x - bMin.x < 24.5) ? -1.2 : 1.2;
-                        plateN.y += (px.y - bMin.y < 9.5) ? -1.2 : 1.2;
-                    }
-                    vec3 btnMetal = shadeArmoredMetalPlate(px, plateN, vec3(0.17, 0.19, 0.21), 0.28, ao, mouseUV, time);
-                    if (!isNeutralStone && lum > 0.08) {
-                        uiCol = mix(btnMetal, fbColor * 1.22, 0.80);
+                    if (edgeD < 1.3) {
+                        uiCol = slateBorder * 1.2;
                     } else {
-                        uiCol = btnMetal;
+                        vec3 btnMetal = shadeArmoredMetalPlate(px, plateN * 0.5, slateSlot, 0.35, 0.95, mouseUV, time);
+                        if (!isNeutralStone && lum > 0.08) {
+                            uiCol = mix(btnMetal, vec3(0.78, 0.82, 0.86) * clamp(lum * 1.6, 0.3, 1.0), 0.78);
+                        } else {
+                            uiCol = btnMetal;
+                        }
                     }
                 } else {
-                    ao *= 0.68;
-                    uiCol = shadeArmoredMetalPlate(px, plateN, vec3(0.11, 0.125, 0.135), 0.42, ao, mouseUV, time);
+                    uiCol = shadeArmoredMetalPlate(px, plateN * 0.4, slateBg * 0.85, 0.42, 0.88, mouseUV, time);
                 }
             }
-            // 3. LOWER SIDEBAR: POWER REACTOR COLUMN & PRODUCTION CAMEO BAYS (y in [180, 400))
+            // 3. LOWER COMMAND & PRODUCTION DOCK (y in [180, 400))
             else {
-                // Power Reactor Column (x in [480, 496))
+                // Left Tactical Power Bar (x in [480, 496))
                 if (px.x < 496.0) {
-                    bool inTube = (px.x >= 483.0 && px.x <= 493.0 && px.y >= 184.0 && px.y <= 396.0);
+                    bool inTube = (px.x >= 484.0 && px.x <= 492.0 && px.y >= 184.0 && px.y <= 395.0);
                     if (inTube) {
-                        float cylNx = (px.x - 488.0) / 5.0;
-                        float glassSpec = pow(max(1.0 - abs(cylNx - 0.25), 0.0), 6.0) * 0.32;
-                        float tick = smoothstep(0.82, 0.96, sin(px.y * (PI / 3.0))) * 0.12;
+                        float cylNx = (px.x - 488.0) / 4.0;
+                        float tick = step(0.35, fract(px.y * 0.25));
                         if (!isNeutralStone && (chroma > 0.12 || greenDom > 0.04) && lum > 0.10) {
-                            // Illuminated Reactor Plasma Column (Green / Yellow / Red)
-                            uiCol = fbColor * 1.45 * (1.0 - 0.25 * cylNx * cylNx) + vec3(0.25, 0.45, 0.28) * glassSpec;
+                            uiCol = mix(vec3(0.18, 0.82, 0.36), fbColor * 1.25, 0.5) * (0.8 + 0.2 * tick) * (1.0 - 0.2 * cylNx * cylNx);
                         } else {
-                            // Dark Smoked Cylindrical Reactor Glass Tube
-                            uiCol = vec3(0.02, 0.045, 0.03) * crtScan + vec3(0.08, 0.22, 0.12) * tick + vec3(0.18, 0.28, 0.22) * glassSpec;
+                            uiCol = slateBg * 0.75 + vec3(0.05, 0.08, 0.07) * tick;
                         }
                     } else {
-                        plateN.x += (px.x < 488.0) ? -0.9 : 0.9;
-                        // Graduation ticks along power housing
-                        if (mod(px.y, 8.0) < 1.2) {
-                            plateN.y += 0.75;
-                            ao *= 0.78;
-                        }
-                        uiCol = shadeArmoredMetalPlate(px, plateN, vec3(0.14, 0.16, 0.175), 0.34, ao, mouseUV, time);
+                        uiCol = shadeArmoredMetalPlate(px, plateN * 0.4, slateBg, 0.38, 0.92, mouseUV, time);
                     }
                 }
-                // Production Cameo Strips (Column 0: [500..564), Column 1: [568..632))
+                // Production & Command Grid Bays (Column 0: [500..564), Column 1: [568..632))
                 else {
                     bool inCol0 = (px.x >= 500.0 && px.x < 564.0);
                     bool inCol1 = (px.x >= 568.0 && px.x < 632.0);
@@ -1232,27 +1435,50 @@ void main() {
                         float colX0 = inCol0 ? 500.0 : 568.0;
                         float slotX = px.x - colX0;
                         float slotY = mod(px.y - 181.0, 48.0);
+                        int rowIdx  = int(floor((px.y - 181.0) / 48.0));
+                        int colIdx  = inCol0 ? 0 : 1;
                         float slotEdge = min(min(slotX, 64.0 - slotX), min(slotY, 48.0 - slotY));
 
-                        if (slotEdge < 1.8) {
-                            // Machined steel cameo bay bezel
-                            plateN.x += (slotX < 32.0) ? -1.2 : 1.2;
-                            plateN.y += (slotY < 24.0) ? -1.2 : 1.2;
-                            uiCol = shadeArmoredMetalPlate(px, plateN, vec3(0.16, 0.18, 0.20), 0.30, ao * 0.85, mouseUV, time);
+                        if (slotEdge < 1.3) {
+                            // Crisp thin metallic border matching CnC-Ultra-Game.jpg
+                            uiCol = slateBorder * 1.18;
                         } else {
                             float neighborVar = abs(lumE - lumW) + abs(lumS - lumN);
                             if (isNeutralStone && neighborVar < 0.14) {
-                                // Empty Cameo Bay -> Dark Recessed Brushed Titanium Slot with Tech Grid
-                                vec2 gF = abs(fract(px * 0.25) - 0.5);
-                                float gridLine = smoothstep(0.44, 0.50, max(gF.x, gF.y)) * 0.08;
-                                uiCol = shadeArmoredMetalPlate(px, plateN * 0.5, vec3(0.09, 0.105, 0.115), 0.42, 0.78, mouseUV, time);
-                                uiCol += vec3(0.05, 0.18, 0.09) * gridLine;
+                                // Empty Command/Production Slot -> Sleek Dark-Slate Card with Crisp Vector Command Glyph
+                                uiCol = shadeArmoredMetalPlate(px, vec2(0.0), slateSlot, 0.40, 0.92, mouseUV, time);
+                                vec2 cUV = (vec2(slotX, slotY) - vec2(32.0, 24.0)) / 14.0;
+                                float iconMask = 0.0;
+                                int iconId = rowIdx * 2 + colIdx;
+                                if (iconId == 0) {
+                                    // Crossed Swords / Attack Move
+                                    float d1 = abs(cUV.x - cUV.y);
+                                    float d2 = abs(cUV.x + cUV.y);
+                                    iconMask = smoothstep(0.14, 0.05, min(d1, d2)) * step(max(abs(cUV.x), abs(cUV.y)), 0.75);
+                                } else if (iconId == 1) {
+                                    // Shield / Defend Position
+                                    float dS = length(cUV * vec2(1.1, 0.9)) - 0.65;
+                                    iconMask = smoothstep(0.10, 0.02, abs(dS));
+                                } else if (iconId == 2) {
+                                    // Radar / Patrol Reticle
+                                    float r = length(cUV);
+                                    iconMask = smoothstep(0.09, 0.02, abs(r - 0.62)) + smoothstep(0.08, 0.02, min(abs(cUV.x), abs(cUV.y))) * step(r, 0.78);
+                                } else if (iconId == 3) {
+                                    // Wrench / Engineering
+                                    float dBar = abs(cUV.x + cUV.y * 0.8);
+                                    iconMask = smoothstep(0.16, 0.06, dBar) * step(length(cUV), 0.72);
+                                } else {
+                                    // Chevron / Tactical Formation
+                                    float dC = abs(abs(cUV.x) * 0.85 + cUV.y - 0.15);
+                                    iconMask = smoothstep(0.14, 0.04, dC) * step(abs(cUV.x), 0.68);
+                                }
+                                uiCol = mix(uiCol, vec3(0.46, 0.50, 0.55), clamp(iconMask, 0.0, 1.0) * 0.65);
                             } else {
-                                // Active Unit / Structure Cameo Icon + READY / Clock overlay
-                                float glassSheen = exp(-((slotX - 18.0) * (slotX - 18.0) + (slotY - 12.0) * (slotY - 12.0)) / 420.0) * 0.10;
-                                vec3 cameoCol = fbColor * 1.12 + fbGrad.x * vec3(0.06) + vec3(0.18, 0.24, 0.20) * glassSheen;
+                                // Active Unit / Building Cameo Icon in Dark-Slate Frame
+                                float vignette = smoothstep(0.0, 5.0, slotEdge);
+                                vec3 cameoCol = fbColor * (0.95 + 0.18 * vignette);
                                 if (greenDom > 0.05) {
-                                    cameoCol = fbColor * 1.28 + vec3(0.08, 0.38, 0.16) * greenDom;
+                                    cameoCol = vec3(0.88, 0.94, 0.90);
                                 }
                                 uiCol = clamp(cameoCol, 0.0, 1.0);
                             }
@@ -1264,26 +1490,18 @@ void main() {
                         float btnX = mod(px.x - colX0, 32.0);
                         float btnY = px.y - 374.0;
                         float bEdge = min(min(btnX, 32.0 - btnX), min(btnY, 25.0 - btnY));
-                        if (bEdge < 2.2) {
-                            plateN.x += (btnX < 16.0) ? -1.3 : 1.3;
-                            plateN.y += (btnY < 12.5) ? -1.3 : 1.3;
-                        }
-                        vec3 rockerMetal = shadeArmoredMetalPlate(px, plateN, vec3(0.16, 0.18, 0.20), 0.28, ao, mouseUV, time);
-                        if (!isNeutralStone && lum > 0.12) {
-                            uiCol = mix(rockerMetal, fbColor * 1.25, 0.82);
+                        if (bEdge < 1.3) {
+                            uiCol = slateBorder * 1.18;
                         } else {
-                            uiCol = rockerMetal;
+                            vec3 rockerMetal = shadeArmoredMetalPlate(px, plateN * 0.4, slateSlot, 0.36, 0.92, mouseUV, time);
+                            if (!isNeutralStone && lum > 0.12) {
+                                uiCol = mix(rockerMetal, vec3(0.75, 0.80, 0.85), 0.65);
+                            } else {
+                                uiCol = rockerMetal;
+                            }
                         }
-                    }
-                    // Vertical Armor Bulkhead Rails between Cameo Columns (x in [496..500), [564..568), [632..640))
-                    else {
-                        float railCenterX = (px.x < 500.0) ? 498.0 : ((px.x < 568.0) ? 566.0 : 636.0);
-                        plateN.x += (px.x - railCenterX) * 0.55;
-                        float boltY = floor((px.y - 181.0) / 48.0) * 48.0 + 205.0;
-                        if (px.y >= 181.0 && px.y < 373.0) {
-                            addHexRivet(px, vec2(railCenterX, boltY), 1.6, plateN, ao);
-                        }
-                        uiCol = shadeArmoredMetalPlate(px, plateN, vec3(0.14, 0.16, 0.175), 0.34, ao, mouseUV, time);
+                    } else {
+                        uiCol = shadeArmoredMetalPlate(px, vec2(0.0), slateBg, 0.40, 0.90, mouseUV, time);
                     }
                 }
             }
@@ -1377,65 +1595,73 @@ void main() {
 
     vec3 soilCol, grassCol, cliffCol, roadCol, beachCol;
     if (theater == 0) {
-        // THEATER_DESERT: Golden ochre sand dunes, terracotta hardpan, red-sandstone cliffs
+        // THEATER_DESERT: Weathered arid ochre sand, dry wadi hardpan, stratified sandstone crags
         float ripples = sin(displacedGlobalXY.x * 28.0 + displacedGlobalXY.y * 12.0 + nFine * 4.0) * 0.5 + 0.5;
-        soilCol  = mix(vec3(0.68, 0.50, 0.30), vec3(0.82, 0.65, 0.42), nFine * 0.75 + ripples * 0.25);
-        grassCol = mix(vec3(0.56, 0.46, 0.28), vec3(0.42, 0.48, 0.24), smoothstep(0.45, 0.75, nFine));
-        cliffCol = mix(vec3(0.52, 0.34, 0.22), vec3(0.68, 0.46, 0.30), nMicro);
-        roadCol  = mix(vec3(0.42, 0.35, 0.26), vec3(0.30, 0.26, 0.20), nMicro);
-        beachCol = vec3(0.76, 0.62, 0.42);
+        soilCol  = mix(vec3(0.46, 0.37, 0.25), vec3(0.58, 0.47, 0.33), nFine * 0.75 + ripples * 0.25);
+        grassCol = mix(vec3(0.36, 0.33, 0.21), vec3(0.28, 0.32, 0.18), smoothstep(0.45, 0.75, nFine));
+        cliffCol = mix(vec3(0.34, 0.26, 0.19), vec3(0.48, 0.38, 0.28), nMicro);
+        roadCol  = mix(vec3(0.28, 0.24, 0.19), vec3(0.21, 0.18, 0.14), nMicro);
+        beachCol = vec3(0.52, 0.44, 0.32);
     } else if (theater == 3) {
-        // THEATER_WINTER: Crisp snowdrifts, icy blue frost, dark slate rock cliffs
-        soilCol  = mix(vec3(0.78, 0.84, 0.90), vec3(0.92, 0.95, 0.98), nFine);
-        grassCol = mix(vec3(0.62, 0.70, 0.78), vec3(0.85, 0.90, 0.96), smoothstep(0.3, 0.7, nFine));
-        cliffCol = mix(vec3(0.28, 0.32, 0.36), vec3(0.45, 0.50, 0.56), nMicro);
-        roadCol  = mix(vec3(0.32, 0.34, 0.38), vec3(0.22, 0.24, 0.27), nMicro);
-        beachCol = vec3(0.60, 0.68, 0.75);
+        // THEATER_WINTER: Gritty windblown snowdrifts, frozen tundra earth, dark slate coastal crags
+        soilCol  = mix(vec3(0.64, 0.69, 0.74), vec3(0.84, 0.88, 0.92), nFine);
+        grassCol = mix(vec3(0.46, 0.52, 0.58), vec3(0.74, 0.79, 0.85), smoothstep(0.3, 0.7, nFine));
+        cliffCol = mix(vec3(0.20, 0.23, 0.26), vec3(0.36, 0.39, 0.43), nMicro);
+        roadCol  = mix(vec3(0.22, 0.24, 0.27), vec3(0.16, 0.18, 0.20), nMicro);
+        beachCol = vec3(0.46, 0.51, 0.56);
     } else {
-        // THEATER_TEMPERATE / JUNGLE: Lush meadow grass, dark loam soil, granite cliffs, asphalt roads
-        soilCol  = mix(vec3(0.34, 0.27, 0.18), vec3(0.45, 0.36, 0.24), nFine);
-        grassCol = mix(vec3(0.20, 0.36, 0.14), vec3(0.32, 0.48, 0.19), nFine * 0.7 + nMicro * 0.3);
-        cliffCol = mix(vec3(0.34, 0.33, 0.31), vec3(0.52, 0.50, 0.47), nMicro);
-        roadCol  = mix(vec3(0.24, 0.24, 0.25), vec3(0.34, 0.33, 0.31), nMicro);
-        beachCol = vec3(0.66, 0.58, 0.42);
+        // THEATER_TEMPERATE / COASTAL (CnC-Ultra-Game.jpg):
+        // Weathered olive-drab scrubland, gritty damp earth/loam, stratified shale/limestone coastal cliffs
+        soilCol  = mix(vec3(0.23, 0.20, 0.16), vec3(0.32, 0.28, 0.22), nFine * 0.7 + nPebble * 0.3);
+        grassCol = mix(vec3(0.17, 0.21, 0.13), vec3(0.25, 0.29, 0.18), nFine * 0.65 + nMicro * 0.35);
+        cliffCol = mix(vec3(0.22, 0.21, 0.19), vec3(0.39, 0.37, 0.34), nMicro);
+        roadCol  = mix(vec3(0.18, 0.16, 0.14), vec3(0.27, 0.25, 0.22), nMicro);
+        beachCol = vec3(0.38, 0.35, 0.29);
     }
 
     float grassWeight = smoothstep(0.28, 0.68, fbm3(displacedGlobalXY * 1.4 + vec2(5.2, 9.1)));
     vec3 surfAlbedo = mix(soilCol, grassCol, grassWeight);
-    float surfRough = mix(0.86, 0.78, grassWeight);
+    float surfRough = mix(0.88, 0.80, grassWeight);
     float surfMetal = 0.02;
 
-    // Perturb terrain normal with 4K micro-detail
-    terrainN = normalize(terrainN + vec3((nMicro - 0.5) * 0.22, (nPebble - 0.5) * 0.22, 0.0));
+    // Perturb terrain normal with 4K micro-detail & gravel scree
+    terrainN = normalize(terrainN + vec3((nMicro - 0.5) * 0.26, (nPebble - 0.5) * 0.26, 0.0));
 
-    // Apply Road Network & Tire Tracks
+    // Apply Muddy Tank-Rutted Dirt Roads & Coastal Concrete Bridges
     if (roadMask > 0.01) {
-        vec3 rCol = roadCol * (0.88 + 0.24 * nPebble);
+        // Parallel heavy armor track ruts carved into damp mud/gravel roads
+        float trackRut = pow(sin(displacedCellXY.x * 18.8 + displacedCellXY.y * 6.2) * 0.5 + 0.5, 3.0);
+        float treadMark = step(0.45, fract((displacedCellXY.x + displacedCellXY.y) * 22.0));
+        vec3 rCol = roadCol * (0.82 + 0.28 * nPebble) * (1.0 - 0.22 * trackRut * treadMark);
+        float rRough = mix(0.68, 0.26, trackRut * 0.75); // Damp mud sheen in tank ruts
         if (cellSlope == 9u) {
-            // 3D Bridge deck steel & concrete planks + side guardrails
+            // 3D Poured-Concrete & Steel Girder Coastal Causeway / Bridge
             float girder = step(0.84, abs(fract(displacedCellXY.x) * 2.0 - 1.0));
-            rCol = mix(vec3(0.32, 0.33, 0.35), vec3(0.55, 0.48, 0.22), girder * 0.5);
-            surfMetal = mix(surfMetal, 0.45, roadMask);
+            rCol = mix(vec3(0.28, 0.29, 0.31), vec3(0.42, 0.39, 0.32), girder * 0.5);
+            surfMetal = mix(surfMetal, 0.42, roadMask);
+            rRough = 0.48;
         }
         surfAlbedo = mix(surfAlbedo, rCol, roadMask);
-        surfRough  = mix(surfRough, 0.62, roadMask);
+        surfRough  = mix(surfRough, rRough, roadMask);
     }
 
-    // Apply Concrete Pavement & Building Bibs
+    // Apply Poured-Concrete Coastal Seawalls, Bastions & Building Bibs
     if (cellOvl == 14u || (cellOvl != 13u && cellSub == 7u)) {
         vec2 gridF = abs(fract(displacedCellXY * 2.0) - 0.5);
         float seam = smoothstep(0.46, 0.50, max(gridF.x, gridF.y));
-        vec3 concCol = mix(vec3(0.44, 0.45, 0.47), vec3(0.22, 0.23, 0.24), seam) * (0.9 + 0.2 * nMicro);
-        surfAlbedo = mix(surfAlbedo, concCol, 0.85);
-        surfRough  = 0.55;
+        vec3 concCol = mix(vec3(0.35, 0.36, 0.37), vec3(0.16, 0.17, 0.18), seam) * (0.88 + 0.24 * nMicro);
+        surfAlbedo = mix(surfAlbedo, concCol, 0.88);
+        surfRough  = 0.56;
     }
 
-    // Apply Stratified Rock Cliffs
+    // Apply Multi-Tiered Stratified Coastal Rock Cliffs & Scree Crevices
     if (rockMask > 0.01) {
-        float strataLines = sin(hGround * 42.0 + nFine * 6.0) * 0.5 + 0.5;
-        vec3 rCliff = cliffCol * (0.72 + 0.45 * strataLines) * (0.85 + 0.3 * nPebble);
+        float strataLines = sin(hGround * 48.0 + nFine * 7.5) * 0.5 + 0.5;
+        float crevice = smoothstep(0.28, 0.05, strataLines);
+        vec3 rCliff = cliffCol * (0.64 + 0.52 * strataLines) * (0.82 + 0.34 * nPebble);
+        rCliff = mix(rCliff, vec3(0.10, 0.095, 0.09), crevice * 0.65);
         surfAlbedo = mix(surfAlbedo, rCliff, rockMask);
-        surfRough  = mix(surfRough, 0.68, rockMask);
+        surfRough  = mix(surfRough, 0.72, rockMask);
     }
 
     // Apply Blast Craters & Carbon Scorch Marks
@@ -1460,52 +1686,65 @@ void main() {
     }
 
     // ------------------------------------------------------------------------
-    // 5. Animated 3D Water, River Rapids & Shoreline Surf Foam
+    // 5. Photorealistic Deep Ocean Swells & Multi-Layered Crashing Whitewater Surf
     // ------------------------------------------------------------------------
-    float shoreBand = smoothstep(0.08, 0.48, waterMask) * smoothstep(0.82, 0.42, waterMask);
+    float shoreBand = smoothstep(0.05, 0.45, waterMask) * smoothstep(0.85, 0.38, waterMask);
     if (shoreBand > 0.01 || isCellBeach(cellRaw)) {
-        float wet = clamp(shoreBand * 1.6 + (isCellBeach(cellRaw) ? 0.45 : 0.0), 0.0, 1.0);
-        surfAlbedo = mix(surfAlbedo, beachCol * 0.68, wet * 0.75);
-        surfRough  = mix(surfRough, 0.22, wet);
+        float wet = clamp(shoreBand * 1.7 + (isCellBeach(cellRaw) ? 0.55 : 0.0), 0.0, 1.0);
+        surfAlbedo = mix(surfAlbedo, beachCol * 0.58, wet * 0.80);
+        surfRough  = mix(surfRough, 0.18, wet);
     }
 
     vec3 waterEmissive = vec3(0.0);
-    if (waterMask > 0.45) {
-        float wDepth = smoothstep(0.45, 0.95, waterMask);
-        vec2 flowDir = (cellSlope == 10u) ? vec2(0.0, -3.5) : vec2(0.7, 0.4);
-        vec2 wp1 = displacedGlobalXY * 4.2 + flowDir * time * 0.85;
-        vec2 wp2 = displacedGlobalXY * 9.5 - flowDir.yx * time * 1.15;
+    if (waterMask > 0.28) {
+        float wDepth = smoothstep(0.32, 0.92, waterMask);
+        vec2 flowDir = (cellSlope == 10u) ? vec2(0.0, -3.5) : vec2(0.65, 0.38);
+        vec2 wp1 = displacedGlobalXY * 4.4 + flowDir * time * 0.82;
+        vec2 wp2 = displacedGlobalXY * 10.2 - flowDir.yx * time * 1.18;
 
         float w1 = fbm3(wp1);
         float w2 = fbm3(wp2);
-        float waveH = (w1 + w2 * 0.5) * 0.04;
+        float chop = noise2D(displacedGlobalXY * 26.0 + flowDir * time * 2.2);
 
         vec2 dWave = vec2(
-            fbm3(wp1 + vec2(0.08, 0.0)) - w1,
-            fbm3(wp1 + vec2(0.0, 0.08)) - w1
-        ) * 3.2;
+            fbm3(wp1 + vec2(0.07, 0.0)) - w1,
+            fbm3(wp1 + vec2(0.0, 0.07)) - w1
+        ) * 3.6 + (vec2(chop) - 0.5) * 0.35;
         terrainN = normalize(vec3(-dWave.x, -dWave.y, 1.0));
 
-        vec3 shallowWater = vec3(0.06, 0.34, 0.36);
-        vec3 deepWater    = vec3(0.02, 0.11, 0.22);
+        // Deep slate-navy ocean swells transitioning to coastal teal-slate (CnC-Ultra-Game.jpg)
+        vec3 shallowWater = vec3(0.045, 0.165, 0.215);
+        vec3 deepWater    = vec3(0.020, 0.068, 0.118);
         surfAlbedo = mix(shallowWater, deepWater, wDepth);
-        surfRough  = 0.08;
-        surfMetal  = 0.15;
+        surfRough  = 0.07;
+        surfMetal  = 0.18;
 
-        // Animated shoreline lapping surf foam & waterfall rapids
-        float foamWave = sin((1.0 - waterMask) * 28.0 - time * 3.8 + w1 * 5.0) * 0.5 + 0.5;
-        float foamMask = smoothstep(0.72, 0.46, waterMask) * smoothstep(0.35, 0.85, foamWave);
+        // Multi-layered crashing whitewater surf & lacy cellular sea-foam along coastlines & crags
+        float coastDist = 1.0 - waterMask;
+        float breaker1 = sin(coastDist * 34.0 - time * 3.6 + w1 * 5.8) * 0.5 + 0.5;
+        float breaker2 = sin(coastDist * 62.0 - time * 4.8 - w2 * 6.4) * 0.5 + 0.5;
+        float laceCell = 1.0 - abs(noise2D(displacedGlobalXY * 22.0 + vec2(w1, w2) * 1.8) * 2.0 - 1.0);
+        float laceFoam = pow(clamp(laceCell, 0.0, 1.0), 2.4);
+
+        float surfZone = smoothstep(0.84, 0.30, waterMask);
+        float mainCrest = smoothstep(0.52, 0.88, breaker1) * smoothstep(0.28, 0.55, waterMask);
+        float subCrest  = smoothstep(0.58, 0.90, breaker2) * surfZone * 0.75;
+        float foamWeb   = surfZone * laceFoam * (0.45 + 0.55 * breaker1);
+        float whitecap  = smoothstep(0.74, 0.92, w1 * 0.65 + w2 * 0.45) * 0.35;
+
+        float foamMask = clamp(max(mainCrest, subCrest) + foamWeb + whitecap, 0.0, 1.0);
         if (cellSlope == 10u || cellSlope == 11u) {
-            foamMask = max(foamMask, smoothstep(0.35, 0.75, w1 + w2 * 0.6));
+            foamMask = max(foamMask, smoothstep(0.32, 0.72, w1 + w2 * 0.65));
         }
-        surfAlbedo = mix(surfAlbedo, vec3(0.88, 0.94, 0.98), clamp(foamMask * 0.85, 0.0, 1.0));
-        surfRough  = mix(surfRough, 0.45, clamp(foamMask, 0.0, 1.0));
 
-        // Sky reflection on water
+        surfAlbedo = mix(surfAlbedo, vec3(0.90, 0.94, 0.97), foamMask * 0.92);
+        surfRough  = mix(surfRough, 0.48, foamMask);
+
+        // Moody coastal sky reflection & crisp specular sun glints on ocean swells
         vec3 R = reflect(-V, terrainN);
-        vec3 skyCol = mix(vec3(0.18, 0.32, 0.48), vec3(0.55, 0.72, 0.88), clamp(R.z, 0.0, 1.0));
+        vec3 skyCol = mix(vec3(0.14, 0.24, 0.34), vec3(0.44, 0.56, 0.68), clamp(R.z, 0.0, 1.0));
         float fresnel = pow(1.0 - max(dot(terrainN, V), 0.0), 4.0);
-        waterEmissive = skyCol * (0.15 + 0.55 * fresnel) * (1.0 - foamMask * 0.7);
+        waterEmissive = skyCol * (0.14 + 0.52 * fresnel) * (1.0 - foamMask * 0.78);
     }
 
     // ------------------------------------------------------------------------
@@ -1559,11 +1798,12 @@ void main() {
         }
     }
 
-    // B. Ray-March Active 3D Entities + Accumulate Ground Shadows & Selection HUD
+    // B. Ray-March Active 3D Entities + Accumulate Ground Shadows, Volumetric Black Smoke & Selection HUD
     int entCount = clamp(int(uTac.view_params3.x), 0, 128);
     float entityShadow = 0.0;
     vec4 hudOverlay = vec4(0.0);
     vec3 vfxAdditive = vec3(0.0);
+    float vfxSmokeAlpha = 0.0;
 
     for (int i = 0; i < 128; ++i) {
         if (i >= entCount) break;
@@ -1578,19 +1818,19 @@ void main() {
         float health = clamp(fract(d1.z), 0.01, 0.999);
 
         // Determine culling radius in cells based on entity category
-        float cullRad = 0.85;
+        float cullRad = 0.95;
         if (cat == 1) {
             int fw = max(1, int(floor(d1.w)) & 7);
             int fh = max(1, (int(floor(d1.w)) >> 3) & 7);
-            cullRad = max(float(fw), float(fh)) * 0.72 + 0.55;
+            cullRad = max(float(fw), float(fh)) * 0.72 + 0.65;
         } else if (cat == 3) {
             cullRad = 1.85;
         } else if (cat == 4 || cat == 6) {
-            cullRad = 1.05;
+            cullRad = 1.25;
         }
 
-        // Fast 2D bounding-box rejection (shifted slightly North for tall 3D projection)
-        vec2 projCenter = d0.xy - vec2(0.0, d0.z * 0.46 + ((cat == 1) ? 0.16 : 0.08));
+        // Fast 2D bounding-box rejection (shifted slightly North for tall 3D projection & rising smoke plumes)
+        vec2 projCenter = d0.xy - vec2(0.0, d0.z * 0.46 + ((cat == 1) ? 0.22 : 0.12));
         vec2 diffXY = groundCellXY - projCenter;
         if (max(abs(diffXY.x), abs(diffXY.y)) > cullRad) continue;
 
@@ -1604,19 +1844,28 @@ void main() {
         float sDist = length(max(abs(sDiff) - sSpan * 0.65, 0.0)) / max(sSpan.x * 0.55, 0.15);
         entityShadow = max(entityShadow, smoothstep(1.0, 0.1, sDist) * ((cat == 3) ? 0.55 : 0.72));
 
-        // 2. Volumetric Explosions, Flames, Smoke & Laser Beams (Categories 5 & 6)
+        // 1b. Amphibious Hovercraft / Naval Gunboat Whitewater Wake Ring on Water
+        if (waterMask > 0.35 && cat == 0 && (subType == 13 || subType == 15)) {
+            float wakeDist = length((groundCellXY - d0.xy) * vec2(1.1, 0.9));
+            float wakeRing = smoothstep(0.68, 0.42, wakeDist) * smoothstep(0.22, 0.42, wakeDist);
+            float wakeTurb = noise2D(groundCellXY * 24.0 - vec2(sin(d1.x), -cos(d1.x)) * time * 4.0);
+            surfAlbedo = mix(surfAlbedo, vec3(0.92, 0.96, 0.99), clamp(wakeRing * wakeTurb * 1.35, 0.0, 0.92));
+        }
+
+        // 2. Volumetric Explosions, Blazing Fire Cores & Billowing Black Smoke Plumes (Categories 5 & 6)
         if (cat == 6) {
             float stage = clamp(d1.x, 0.0, 1.0);
-            float rad = clamp(d1.w, 0.18, 0.85);
+            float rad = clamp(d1.w, 0.22, 0.95);
             vec2 expCenter = d0.xy - vec2(0.0, 0.12);
-            float r = length(groundCellXY - expCenter) / rad;
-            if (r < 1.35) {
-                float fNoise = fbm3((groundCellXY - expCenter) * 8.0 - vec2(0.0, time * 4.5));
-                float core = smoothstep(1.15, 0.0, r - fNoise * 0.35) * (1.0 - stage * 0.75);
+            vec2 relExp = groundCellXY - expCenter;
+            float r = length(relExp) / rad;
+            if (r < 1.55) {
+                float fNoise = fbm4(relExp * 7.5 - vec2(0.0, time * 4.2));
+                float core = smoothstep(1.15, 0.0, r - fNoise * 0.38) * (1.0 - stage * 0.72);
                 if (subType == 11 || subType == 35 || subType == 59) {
-                    // Smoke plume
-                    float smk = smoothstep(1.1, 0.1, r - fNoise * 0.4) * (1.0 - stage * 0.85);
-                    vfxAdditive = mix(vfxAdditive, vec3(0.12, 0.13, 0.15), smk * 0.65);
+                    // Dense billowing dark-charcoal smoke plume
+                    float smk = smoothstep(1.25, 0.15, r - fNoise * 0.45) * (1.0 - stage * 0.75);
+                    vfxSmokeAlpha = max(vfxSmokeAlpha, clamp(smk * 0.85, 0.0, 0.88));
                 } else if (subType >= 22 && subType <= 29) {
                     // Chemical / Tiberium spray cloud
                     vfxAdditive += vec3(0.12, 0.95, 0.32) * core * 1.25;
@@ -1626,9 +1875,14 @@ void main() {
                     float beam = exp(-beamW * 14.0) * step(groundCellXY.y, d0.y + 0.25) * (1.0 - stage * 0.6);
                     vfxAdditive += vec3(0.45, 0.82, 1.65) * (beam * 2.2 + core * 1.8);
                 } else {
-                    // High-temperature fireball + expanding shockwave + dark smoke rim
-                    vec3 fireCol = mix(vec3(1.0, 0.22, 0.02), vec3(1.0, 0.92, 0.55), smoothstep(0.65, 0.0, r));
-                    vfxAdditive += fireCol * core * 1.65;
+                    // Blazing incandescent white-orange fireball core + billowing black smoke column above
+                    vec3 fireCol = mix(vec3(0.98, 0.26, 0.03), vec3(1.0, 0.94, 0.62), smoothstep(0.68, 0.0, r));
+                    vfxAdditive += fireCol * core * 1.85;
+                    // Rising black smoke canopy around and north of the fireball
+                    vec2 smkRel = (relExp + vec2(0.0, 0.22 * rad)) / (rad * 1.25);
+                    float smkR = length(smkRel * vec2(1.1, 0.8));
+                    float smkRing = smoothstep(1.2, 0.25, smkR - fNoise * 0.42) * smoothstep(0.12, 0.55, r + stage * 0.5);
+                    vfxSmokeAlpha = max(vfxSmokeAlpha, clamp(smkRing * (0.45 + 0.45 * stage), 0.0, 0.88));
                 }
             }
             continue;
@@ -1697,15 +1951,19 @@ void main() {
             u -= max(d * 0.88, 0.005);
         }
 
-        // 4. Damage Smoke Plume & Muzzle Flash VFX for damaged / firing units
+        // 4. Towering Volumetric Black Smoke Plume, Fire Base & Muzzle Flash VFX for damaged / firing units
         if ((flags & 8) != 0) {
-            vec2 smkOrigin = d0.xy - vec2(0.0, 0.18);
+            vec2 smkOrigin = d0.xy - vec2(0.0, 0.16);
             vec2 sd = groundCellXY - smkOrigin;
-            if (sd.y < 0.05 && sd.y > -0.55 && abs(sd.x) < 0.28) {
-                float rise = clamp(-sd.y / 0.55, 0.0, 1.0);
-                float sn = fbm3(sd * 9.0 + vec2(0.0, time * 2.8 + float(i)));
-                float smkMask = smoothstep(0.22 + rise * 0.12, 0.0, abs(sd.x + (sn - 0.5) * 0.18)) * (1.0 - rise);
-                vfxAdditive = mix(vfxAdditive, vec3(0.05, 0.05, 0.06), smkMask * 0.55);
+            if (sd.y < 0.08 && sd.y > -0.82 && abs(sd.x) < 0.42) {
+                float rise = clamp(-sd.y / 0.82, 0.0, 1.0);
+                float sn = fbm4(sd * 8.5 + vec2(sin(time * 0.8 + float(i)), time * 2.6 + float(i)));
+                float plumeWidth = 0.16 + rise * 0.22;
+                float smkMask = smoothstep(plumeWidth, 0.02, abs(sd.x - rise * 0.08 + (sn - 0.5) * 0.24)) * pow(1.0 - rise, 0.65);
+                // Incandescent orange fire core at base of burning structure/tank
+                float fireBase = smoothstep(0.22, 0.0, length(sd - vec2(0.0, -0.04)) - sn * 0.08);
+                vfxAdditive += mix(vec3(0.98, 0.28, 0.03), vec3(1.0, 0.88, 0.42), fireBase) * fireBase * 1.45;
+                vfxSmokeAlpha = max(vfxSmokeAlpha, clamp(smkMask * 0.84, 0.0, 0.88));
             }
         }
         if ((flags & 2) != 0) {
@@ -1927,7 +2185,17 @@ void main() {
         dynamicLight += albedo * vec3(0.06, 0.65, 0.22) * tibStage * 0.35;
     }
 
-    vec3 litColor = ambientLight + directLight + dynamicLight + emissive + vfxAdditive;
+    vec3 litColor = ambientLight + directLight + dynamicLight + emissive;
+    if (vfxSmokeAlpha > 0.001) {
+        // Billowing dark charcoal smoke plume occludes battlefield beneath it
+        litColor = mix(litColor, vec3(0.035, 0.040, 0.045), vfxSmokeAlpha);
+    }
+    litColor += vfxAdditive;
+
+    // Subtle cool-slate coastal atmospheric mist drifting across upper horizon & cliff tops (CnC-Ultra-Game.jpg)
+    float mistNoise = fbm3(globalCellXY * 0.85 + vec2(time * 0.12, -time * 0.06));
+    float horizonMist = smoothstep(0.36, 0.0, vUV.y) * (0.14 + 0.16 * mistNoise);
+    litColor = mix(litColor, vec3(0.42, 0.48, 0.54), horizonMist);
 
     // ------------------------------------------------------------------------
     // 9. 3D Holographic Building Placement Grid & Rubber-Band Selection Box
@@ -1979,10 +2247,274 @@ void main() {
     vec3 mapped = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
     mapped = pow(clamp(mapped, 0.0, 1.0), vec3(0.92));
 
-    // Cast realistic 3D contact shadow from Top Tab Bar, Right Sidebar & Active Modal Dialog onto battlefield
-    float topShadow = smoothstep(0.0, 5.5, (vUV.y - tacRect.y) * 400.0);
+    // Cast subtle 3D contact shadow from Right Command Dock onto battlefield
     float sideShadow = (tacRect.z < 0.99) ? smoothstep(0.0, 6.5, (tacRect.z - vUV.x) * 640.0) : 1.0;
-    mapped *= (0.48 + 0.52 * min(topShadow, sideShadow));
+    mapped *= (0.55 + 0.45 * sideShadow);
+
+    // ------------------------------------------------------------------------
+    // 10b. Sleek Dark-Slate Corner Tactical HUD Cards (CnC-Ultra-Game.jpg)
+    // ------------------------------------------------------------------------
+    vec2 px = vUV * vec2(640.0, 400.0);
+    vec3 hudBg     = vec3(0.086, 0.098, 0.114);
+    vec3 hudSlot   = vec3(0.118, 0.134, 0.154);
+    vec3 hudBorder = vec3(0.225, 0.252, 0.282);
+
+    if (dlgRect.z <= dlgRect.x) {
+        // ====================================================================
+        // CARD 1: TOP-LEFT FLOATING RESOURCE & TELEMETRY BAR (px in [4..218, 3..27])
+        // ====================================================================
+        if (px.x >= 2.0 && px.x <= 222.0 && px.y >= 1.0 && px.y <= 31.0) {
+            vec2 bMin = vec2(4.0, 3.0);
+            vec2 bMax = vec2(218.0, 27.0);
+            vec2 dOut = max(bMin - px, px - bMax);
+            float distOut = length(max(dOut, vec2(0.0)));
+            if (distOut > 0.0) {
+                // Soft outer drop shadow
+                mapped *= mix(0.45, 1.0, smoothstep(0.0, 4.0, distOut));
+            } else {
+                vec2 dIn = min(px - bMin, bMax - px);
+                float edge = min(dIn.x, dIn.y);
+                vec3 cardCol = (edge < 1.2) ? hudBorder * 1.18 : hudBg;
+
+                // Module dividers at x = 62, 116, 166
+                if (abs(px.x - 62.0) < 0.6 || abs(px.x - 116.0) < 0.6 || abs(px.x - 166.0) < 0.6) {
+                    cardCol = hudBorder * 0.85;
+                }
+
+                int credits  = int(uTac.hud_telemetry[0].x + 0.5);
+                int powerOut = int(uTac.hud_telemetry[0].y + 0.5);
+                int powerDrn = int(uTac.hud_telemetry[0].z + 0.5);
+                int curUnits = int(uTac.hud_telemetry[0].w + 0.5);
+                int maxUnits = int(uTac.hud_telemetry[1].x + 0.5);
+                int tiberium = int(uTac.hud_telemetry[1].y + 0.5);
+                int netPower = max(0, powerOut - powerDrn);
+
+                // 1. Stacked Gold Coins Icon at (12, 15) + Credits + "+510"
+                float c1 = length((px - vec2(12.5, 17.5)) * vec2(1.0, 1.4)) - 4.2;
+                float c2 = length((px - vec2(12.5, 14.0)) * vec2(1.0, 1.4)) - 4.2;
+                float c3 = length((px - vec2(12.5, 10.5)) * vec2(1.0, 1.4)) - 4.2;
+                if (min(c1, min(c2, c3)) < 0.0) {
+                    cardCol = mix(vec3(0.78, 0.58, 0.16), vec3(0.98, 0.82, 0.32), smoothstep(0.0, -2.0, min(c1, min(c2, c3))));
+                }
+                float txtCred = drawHudNumber(px, vec2(20.0, 6.5), credits, false, 1.35);
+                float txtCredRate = drawHudNumber(px, vec2(20.0, 16.5), 510, true, 1.05);
+                cardCol = mix(cardCol, vec3(0.95, 0.97, 1.0), txtCred);
+                cardCol = mix(cardCol, vec3(0.28, 0.88, 0.42), txtCredRate);
+
+                // 2. Amber Lightning Bolt Icon at (70, 15) + Power + "+surplus"
+                vec2 lp = px - vec2(70.5, 15.0);
+                float bolt = step(abs(lp.y), 6.5) * step(abs(lp.x - lp.y * 0.25 + sign(lp.y) * 1.1), 1.8);
+                cardCol = mix(cardCol, vec3(0.98, 0.78, 0.22), bolt);
+                float txtPow = drawHudNumber(px, vec2(77.0, 6.5), powerOut, false, 1.35);
+                float txtPowRate = drawHudNumber(px, vec2(77.0, 16.5), netPower, true, 1.05);
+                cardCol = mix(cardCol, vec3(0.95, 0.97, 1.0), txtPow);
+                cardCol = mix(cardCol, vec3(0.28, 0.88, 0.42), txtPowRate);
+
+                // 3. Squad Silhouette Icon at (124, 15) + Force Count (curUnits / maxUnits)
+                float head1 = length(px - vec2(123.5, 11.0)) - 2.2;
+                float body1 = length((px - vec2(123.5, 17.5)) * vec2(1.0, 0.75)) - 3.4;
+                if (min(head1, body1) < 0.0) {
+                    cardCol = vec3(0.68, 0.74, 0.80);
+                }
+                float txtForce = drawHudNumber(px, vec2(130.0, 6.5), curUnits, false, 1.35);
+                float txtCap   = drawHudNumber(px, vec2(130.0, 16.5), maxUnits, false, 1.05);
+                cardCol = mix(cardCol, vec3(0.95, 0.97, 1.0), txtForce);
+                cardCol = mix(cardCol, vec3(0.58, 0.64, 0.70), txtCap);
+
+                // 4. Emerald Tiberium Crystal Icon at (174, 15) + Tiberium + "+15"
+                vec2 tp = abs(px - vec2(174.0, 15.0));
+                if (tp.x * 1.5 + tp.y < 6.2) {
+                    cardCol = mix(vec3(0.12, 0.68, 0.32), vec3(0.38, 0.98, 0.58), smoothstep(6.2, 0.0, tp.x * 1.5 + tp.y));
+                }
+                float txtTib = drawHudNumber(px, vec2(181.0, 6.5), tiberium, false, 1.35);
+                float txtTibRate = drawHudNumber(px, vec2(181.0, 16.5), 15, true, 1.05);
+                cardCol = mix(cardCol, vec3(0.95, 0.97, 1.0), txtTib);
+                cardCol = mix(cardCol, vec3(0.28, 0.88, 0.42), txtTibRate);
+
+                mapped = mix(mapped, cardCol, 0.90);
+            }
+        }
+
+        // ====================================================================
+        // CARD 2: TOP-RIGHT FLOATING "OBJECTIVES" CARD (px in [378..476, 4..56])
+        // ====================================================================
+        if (px.x >= 376.0 && px.x <= 478.0 && px.y >= 2.0 && px.y <= 59.0) {
+            vec2 bMin = vec2(378.0, 4.0);
+            vec2 bMax = vec2(476.0, 56.0);
+            vec2 dOut = max(bMin - px, px - bMax);
+            float distOut = length(max(dOut, vec2(0.0)));
+            if (distOut > 0.0) {
+                mapped *= mix(0.50, 1.0, smoothstep(0.0, 3.5, distOut));
+            } else {
+                vec2 dIn = min(px - bMin, bMax - px);
+                float edge = min(dIn.x, dIn.y);
+                vec3 cardCol = (edge < 1.1) ? hudBorder * 1.15 : hudBg;
+
+                // Header "OBJECTIVES" (O=79,B=66,J=74,E=69,C=67,T=84,I=73,V=86,E=69,S=83)
+                int objHdr[10] = int[10](79, 66, 74, 69, 67, 84, 73, 86, 69, 83);
+                vec2 hRel = px - vec2(384.0, 8.0);
+                if (hRel.x >= 0.0 && hRel.y >= 0.0 && hRel.y < 6.0) {
+                    int ci = int(floor(hRel.x / 4.5));
+                    if (ci >= 0 && ci < 10) {
+                        float g = sampleGlyph3x5(objHdr[ci], vec2(hRel.x - float(ci) * 4.5, hRel.y), 1.1);
+                        cardCol = mix(cardCol, vec3(0.92, 0.95, 0.98), g);
+                    }
+                }
+                if (abs(px.y - 17.0) < 0.5 && px.x >= 383.0 && px.x <= 471.0) {
+                    cardCol = hudBorder * 0.85;
+                }
+
+                // 3 Objective Bullet Dots & Crisp Micro-Text Lines
+                for (int r = 0; r < 3; ++r) {
+                    float ry = 23.0 + float(r) * 11.0;
+                    float dotD = length(px - vec2(385.5, ry + 2.2)) - 1.4;
+                    if (dotD < 0.0) {
+                        cardCol = (r == 0) ? vec3(0.28, 0.90, 0.44) : vec3(0.68, 0.74, 0.80);
+                    }
+                    // Clean stylized micro-text word bars matching CnC-Ultra-Game.jpg
+                    vec2 tRel = px - vec2(390.0, ry);
+                    if (tRel.x >= 0.0 && tRel.x < (68.0 - float(r) * 7.0) && tRel.y >= 0.0 && tRel.y < 4.5) {
+                        float charCell = step(0.22, fract(tRel.x * 0.25)) * step(0.25, fract(tRel.y * 0.45));
+                        float wordGap = step(0.12, abs(fract(tRel.x * 0.045 + float(r) * 0.31) - 0.45));
+                        cardCol = mix(cardCol, vec3(0.76, 0.80, 0.84), charCell * wordGap * 0.85);
+                    }
+                }
+
+                mapped = mix(mapped, cardCol, 0.86);
+            }
+        }
+
+        // ====================================================================
+        // CARD 3: BOTTOM-LEFT SELECTED UNIT INSPECTOR CARD (px in [4..164, 306..396])
+        // ====================================================================
+        if (px.x >= 2.0 && px.x <= 168.0 && px.y >= 303.0 && px.y <= 399.0) {
+            vec2 bMin = vec2(4.0, 306.0);
+            vec2 bMax = vec2(164.0, 396.0);
+            vec2 dOut = max(bMin - px, px - bMax);
+            float distOut = length(max(dOut, vec2(0.0)));
+            if (distOut > 0.0) {
+                mapped *= mix(0.42, 1.0, smoothstep(0.0, 4.0, distOut));
+            } else {
+                vec2 dIn = min(px - bMin, bMax - px);
+                float edge = min(dIn.x, dIn.y);
+                vec3 cardCol = (edge < 1.3) ? hudBorder * 1.22 : hudBg;
+
+                int selPackedType = int(uTac.hud_telemetry[1].z + 0.5);
+                float selHp = clamp(uTac.hud_telemetry[1].w, 0.01, 1.0);
+
+                // A. Left 3D Studio Unit Portrait Box (px in [8..66, 310..368])
+                if (px.x >= 8.0 && px.x <= 66.0 && px.y >= 310.0 && px.y <= 368.0) {
+                    vec2 pEdge = min(px - vec2(8.0, 310.0), vec2(66.0, 368.0) - px);
+                    if (min(pEdge.x, pEdge.y) < 1.1) {
+                        cardCol = hudBorder * 1.15;
+                    } else {
+                        vec2 uvBox = (px - vec2(8.0, 310.0)) / 58.0;
+                        cardCol = renderUnitPortrait3D(uvBox, selPackedType, time);
+                    }
+                }
+                // B. Right Unit Telemetry Column (px in [70..160, 310..368])
+                else if (px.x >= 70.0 && px.x <= 160.0 && px.y >= 310.0 && px.y <= 368.0) {
+                    // Row 1: Live Selected Unit Name from uTac.hud_chars[0..1]
+                    float nameMask = drawHudPackedStr(px, vec2(71.0, 312.0), 0, 18, 1.15);
+                    cardCol = mix(cardCol, vec3(0.96, 0.98, 1.0), nameMask);
+
+                    // Row 2: Live Role Subtitle from uTac.hud_chars[2..3]
+                    float roleMask = drawHudPackedStr(px, vec2(71.0, 321.5), 2, 20, 0.95);
+                    cardCol = mix(cardCol, vec3(0.62, 0.67, 0.72), roleMask);
+
+                    // Row 3: "HEALTH:" + live percentage
+                    int hpLbl[7] = int[7](72, 69, 65, 76, 84, 72, 58); // HEALTH:
+                    vec2 hpRel = px - vec2(71.0, 333.0);
+                    if (hpRel.x >= 0.0 && hpRel.y >= 0.0 && hpRel.y < 5.5) {
+                        int ci = int(floor(hpRel.x / 4.0));
+                        if (ci >= 0 && ci < 7) {
+                            float g = sampleGlyph3x5(hpLbl[ci], vec2(hpRel.x - float(ci) * 4.0, hpRel.y), 1.0);
+                            cardCol = mix(cardCol, vec3(0.78, 0.82, 0.86), g);
+                        }
+                    }
+                    int hpPct = clamp(int(selHp * 100.0 + 0.5), 1, 100);
+                    float pctMask = drawHudNumber(px, vec2(102.0, 333.0), hpPct, false, 1.0);
+                    float pctSym  = sampleGlyph3x5(37, px - vec2(115.0, 333.0), 1.0);
+                    cardCol = mix(cardCol, vec3(0.95, 0.98, 1.0), max(pctMask, pctSym));
+
+                    // Row 4: Glowing Green Health Bar (px in [71..157, 342..348])
+                    if (px.x >= 71.0 && px.x <= 157.0 && px.y >= 342.0 && px.y <= 348.0) {
+                        float uBar = (px.x - 71.0) / 86.0;
+                        vec2 hbEdge = min(px - vec2(71.0, 342.0), vec2(157.0, 348.0) - px);
+                        if (min(hbEdge.x, hbEdge.y) < 0.9) {
+                            cardCol = hudBorder;
+                        } else if (uBar <= selHp) {
+                            vec3 hCol = (selHp > 0.5)
+                                ? mix(vec3(0.92, 0.78, 0.16), vec3(0.22, 0.86, 0.38), (selHp - 0.5) * 2.0)
+                                : mix(vec3(0.90, 0.18, 0.14), vec3(0.92, 0.78, 0.16), selHp * 2.0);
+                            cardCol = hCol * (0.85 + 0.15 * step(0.2, fract(uBar * 14.0)));
+                        } else {
+                            cardCol = vec3(0.05, 0.06, 0.07);
+                        }
+                    }
+
+                    // Row 5: "VETERANCY: REGULAR"
+                    int vetLbl[18] = int[18](86, 69, 84, 69, 82, 65, 78, 67, 89, 58, 32, 82, 69, 71, 85, 76, 65, 82);
+                    vec2 vRel = px - vec2(71.0, 354.0);
+                    if (vRel.x >= 0.0 && vRel.y >= 0.0 && vRel.y < 5.5) {
+                        int ci = int(floor(vRel.x / 3.8));
+                        if (ci >= 0 && ci < 18 && vetLbl[ci] != 32) {
+                            float g = sampleGlyph3x5(vetLbl[ci], vec2(vRel.x - float(ci) * 3.8, vRel.y), 0.95);
+                            vec3 vCol = (ci >= 11) ? vec3(0.88, 0.92, 0.96) : vec3(0.58, 0.63, 0.68);
+                            cardCol = mix(cardCol, vCol, g);
+                        }
+                    }
+                }
+                // C. Bottom Row of 6 Tactical Subsystem Icon Squares (px in [8..158, 372..392])
+                else if (px.x >= 8.0 && px.x < 158.0 && px.y >= 372.0 && px.y <= 392.0) {
+                    float relX = px.x - 8.0;
+                    int boxIdx = int(floor(relX / 25.0));
+                    float boxX = relX - float(boxIdx) * 25.0;
+                    float boxY = px.y - 372.0;
+                    if (boxIdx >= 0 && boxIdx < 6 && boxX <= 23.0) {
+                        float bEdge = min(min(boxX, 23.0 - boxX), min(boxY, 20.0 - boxY));
+                        if (bEdge < 1.1) {
+                            cardCol = hudBorder * 1.15;
+                        } else {
+                            cardCol = hudSlot;
+                            vec2 ic = (vec2(boxX, boxY) - vec2(11.5, 10.0)) / 7.5;
+                            float glyph = 0.0;
+                            if (boxIdx == 0) {
+                                // Dual AP Shells
+                                float s1 = length(vec2(abs(ic.x) - 0.32, ic.y * 0.65)) - 0.22;
+                                glyph = smoothstep(0.08, -0.02, s1);
+                            } else if (boxIdx == 1) {
+                                // Composite Armor Plate
+                                float dA = max(abs(ic.x) * 0.85 + abs(ic.y) * 0.5, abs(ic.y)) - 0.62;
+                                glyph = smoothstep(0.08, -0.02, dA);
+                            } else if (boxIdx == 2) {
+                                // Tracked Suspension Drive
+                                float dT = max(abs(ic.x) - 0.68, abs(ic.y) - 0.36);
+                                glyph = smoothstep(0.10, 0.0, abs(dT));
+                            } else if (boxIdx == 3) {
+                                // Rotating Tank Turret
+                                float dTur = length(ic + vec2(0.15, 0.0)) - 0.42;
+                                float dGun = max(abs(ic.x - 0.35) - 0.42, abs(ic.y) - 0.10);
+                                glyph = smoothstep(0.08, -0.02, min(dTur, dGun));
+                            } else if (boxIdx == 4) {
+                                // Heavy Rifled Cannon
+                                float dB = max(abs(ic.x) - 0.72, abs(ic.y) - 0.14);
+                                glyph = smoothstep(0.08, -0.02, dB);
+                            } else {
+                                // Crew / Commander Silhouette
+                                float dH = length(ic - vec2(0.0, -0.28)) - 0.26;
+                                float dS = length((ic - vec2(0.0, 0.42)) * vec2(0.8, 1.2)) - 0.42;
+                                glyph = smoothstep(0.08, -0.02, min(dH, dS));
+                            }
+                            cardCol = mix(cardCol, vec3(0.68, 0.74, 0.80), clamp(glyph, 0.0, 1.0));
+                        }
+                    }
+                }
+
+                mapped = mix(mapped, cardCol, 0.94);
+            }
+        }
+    }
 
     if (dlgRect.z > dlgRect.x) {
         vec2 dCenter = 0.5 * (dlgRect.xy + dlgRect.zw) * vec2(640.0, 400.0);

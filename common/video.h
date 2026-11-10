@@ -125,7 +125,9 @@ struct Tactical3DUBOData
     float view_params1[4];        // x=tac_v1, y=sub_cell_x, z=sub_cell_y, w=cells_wide
     float view_params2[4];        // x=cells_high, y=origin_cell_x, z=origin_cell_y, w=theater
     float view_params3[4];        // x=entity_count, y=light_count, z=player_house, w=palette_fade
-    float overlay_rects[4][4];    // [0]=rubber_band, [1]=dialog_rect, [2]=tooltip_rect, [3]=aux_ui
+    float overlay_rects[4][4];    // [0]=rubber_band, [1]=dialog_rect, [2]=tooltip_rect, [3]=cursor_rect
+    float hud_telemetry[2][4];    // [0]=(credits, power, drain, cur_units), [1]=(max_units, tiberium, sel_type, sel_hp)
+    uint32_t hud_chars[4][4];     // [0..1]=selected unit name (32 chars), [2..3]=selected unit role subtitle (32 chars)
     uint32_t cell_grid[150][4];   // 30 x 20 cells = 600 uints
     float ent_data0[128][4];      // x=wx, y=wy, z=alt, w=packed_type
     float ent_data1[128][4];      // x=hull_yaw, y=turret_yaw, z=health_and_flags, w=footprint_and_aux

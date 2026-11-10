@@ -2997,6 +2997,109 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
     ubo.view_params3[2] = static_cast<float>(playerHouseId) + std::min(0.95f, std::max(0.0f, msgV1));
     ubo.view_params3[3] = 1.0f;
 
+    // Populate Live Corner Tactical HUD Telemetry & Selected Unit Inspector Card
+    auto packStr32 = [](const char* s, uint32_t outVec[2][4]) {
+        std::memset(outVec, 0, sizeof(uint32_t) * 8);
+        if (!s) return;
+        for (int idx = 0; idx < 32 && s[idx] != '\0'; ++idx) {
+            unsigned char c = static_cast<unsigned char>(s[idx]);
+            if (c >= 'a' && c <= 'z') c = static_cast<unsigned char>(c - 'a' + 'A');
+            int word = idx >> 2;
+            int shift = (idx & 3) * 8;
+            outVec[word >> 2][word & 3] |= (static_cast<uint32_t>(c) << shift);
+        }
+    };
+
+    float liveCredits = PlayerPtr ? static_cast<float>(PlayerPtr->Available_Money()) : 0.0f;
+    float livePower = PlayerPtr ? static_cast<float>(PlayerPtr->Power) : 0.0f;
+    float liveDrain = PlayerPtr ? static_cast<float>(PlayerPtr->Drain) : 0.0f;
+    float liveTiberium = PlayerPtr ? static_cast<float>(PlayerPtr->Tiberium) : 0.0f;
+    int curForce = PlayerPtr ? static_cast<int>(PlayerPtr->CurUnits + PlayerPtr->CurInfantry) : 0;
+    int maxForce = PlayerPtr ? std::max<int>(curForce + 12, static_cast<int>(PlayerPtr->CurBuildings) * 10 + 30) : 50;
+
+    ObjectClass* inspectObj = (CurrentObject.Count() > 0) ? CurrentObject[0] : nullptr;
+    if (!inspectObj) {
+        // Fallback to primary player unit/building if nothing is actively selected
+        for (int i = 0; i < Units.Count(); ++i) {
+            UnitClass* u = Units.Ptr(i);
+            if (u && u->IsActive && !u->IsInLimbo && u->IsOwnedByPlayer) {
+                inspectObj = u;
+                break;
+            }
+        }
+        if (!inspectObj) {
+            for (int i = 0; i < Infantry.Count(); ++i) {
+                InfantryClass* inf = Infantry.Ptr(i);
+                if (inf && inf->IsActive && !inf->IsInLimbo && inf->IsOwnedByPlayer) {
+                    inspectObj = inf;
+                    break;
+                }
+            }
+        }
+    }
+
+    int selPackedType = -1;
+    float selHealth = 1.0f;
+    const char* selName = "M1A2 ABRAMS";
+    const char* selRole = "MAIN BATTLE TANK";
+
+    if (inspectObj) {
+        selHealth = std::max(0.01f, std::min(1.0f, static_cast<float>(inspectObj->Health_Ratio()) / 256.0f));
+        selName = Text_String(inspectObj->Full_Name());
+        RTTIType rtti = inspectObj->What_Am_I();
+        if (rtti == RTTI_UNIT) {
+            const UnitClass* u = static_cast<const UnitClass*>(inspectObj);
+            int sub = std::max(0, std::min(127, static_cast<int>(*u)));
+            int hId = Map_House_To_Color_ID(u->Owner());
+            selPackedType = 0 | (sub << 3) | (hId << 10);
+            if (*u == UNIT_HTANK) selRole = "HEAVY ASSAULT TANK";
+            else if (*u == UNIT_MTANK) selRole = "MAIN BATTLE TANK";
+            else if (*u == UNIT_LTANK) selRole = "LIGHT ARMORED TANK";
+            else if (*u == UNIT_HOVER) selRole = "AMPHIBIOUS LCAC";
+            else if (*u == UNIT_GUNBOAT) selRole = "COASTAL WARSHIP";
+            else if (*u == UNIT_HARVESTER) selRole = "RESOURCE HARVESTER";
+            else if (*u == UNIT_MCV) selRole = "MOBILE CONSTRUCTION";
+            else if (*u == UNIT_JEEP || *u == UNIT_BUGGY || *u == UNIT_BIKE) selRole = "FAST RECON VEHICLE";
+            else if (*u == UNIT_APC) selRole = "ARMORED TRANSPORT";
+            else selRole = "TACTICAL ARTILLERY";
+        } else if (rtti == RTTI_INFANTRY) {
+            const InfantryClass* inf = static_cast<const InfantryClass*>(inspectObj);
+            int sub = std::max(0, std::min(127, static_cast<int>(*inf)));
+            int hId = Map_House_To_Color_ID(inf->Owner());
+            selPackedType = 2 | (sub << 3) | (hId << 10);
+            if (*inf == INFANTRY_E3) selRole = "ANTI-ARMOR SQUAD";
+            else if (*inf == INFANTRY_E2) selRole = "GRENADIER SQUAD";
+            else if (*inf == INFANTRY_E7) selRole = "COMBAT ENGINEER";
+            else if (*inf == INFANTRY_RAMBO) selRole = "SPECIAL FORCES COMMANDO";
+            else selRole = "RIFLE INFANTRY SQUAD";
+        } else if (rtti == RTTI_BUILDING) {
+            const BuildingClass* b = static_cast<const BuildingClass*>(inspectObj);
+            int sub = std::max(0, std::min(127, static_cast<int>(*b)));
+            int hId = Map_House_To_Color_ID(b->Owner());
+            selPackedType = 1 | (sub << 3) | (hId << 10);
+            selRole = "BASE INSTALLATION";
+        } else if (rtti == RTTI_AIRCRAFT) {
+            const AircraftClass* air = static_cast<const AircraftClass*>(inspectObj);
+            int sub = std::max(0, std::min(127, static_cast<int>(*air)));
+            int hId = Map_House_To_Color_ID(air->Owner());
+            selPackedType = 3 | (sub << 3) | (hId << 10);
+            selRole = "STRIKE AIRCRAFT";
+        }
+    }
+
+    ubo.hud_telemetry[0][0] = liveCredits;
+    ubo.hud_telemetry[0][1] = livePower;
+    ubo.hud_telemetry[0][2] = liveDrain;
+    ubo.hud_telemetry[0][3] = static_cast<float>(curForce);
+
+    ubo.hud_telemetry[1][0] = static_cast<float>(maxForce);
+    ubo.hud_telemetry[1][1] = liveTiberium;
+    ubo.hud_telemetry[1][2] = static_cast<float>(selPackedType);
+    ubo.hud_telemetry[1][3] = selHealth;
+
+    packStr32(selName, &ubo.hud_chars[0]);
+    packStr32(selRole, &ubo.hud_chars[2]);
+
     Video_Set_Tactical_3D_State(true, &ubo);
 }
 
