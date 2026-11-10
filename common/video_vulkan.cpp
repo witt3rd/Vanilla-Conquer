@@ -2587,10 +2587,22 @@ void Video_Set_Tactical_Dialog_Rect(int x, int y, int w, int h)
     int gw = hwcursor.GameW > 0 ? hwcursor.GameW : 640;
     int gh = hwcursor.GameH > 0 ? hwcursor.GameH : 400;
     if (w > 0 && h > 0) {
-        tactical3DState.dialogRect[0] = static_cast<float>(x) / static_cast<float>(gw);
-        tactical3DState.dialogRect[1] = static_cast<float>(y) / static_cast<float>(gh);
-        tactical3DState.dialogRect[2] = static_cast<float>(x + w) / static_cast<float>(gw);
-        tactical3DState.dialogRect[3] = static_cast<float>(y + h) / static_cast<float>(gh);
+        float u0 = static_cast<float>(x) / static_cast<float>(gw);
+        float v0 = static_cast<float>(y) / static_cast<float>(gh);
+        float u1 = static_cast<float>(x + w) / static_cast<float>(gw);
+        float v1 = static_cast<float>(y + h) / static_cast<float>(gh);
+        if (tactical3DState.dialogRect[2] > tactical3DState.dialogRect[0] &&
+            tactical3DState.dialogRect[3] > tactical3DState.dialogRect[1]) {
+            tactical3DState.dialogRect[0] = std::min(tactical3DState.dialogRect[0], u0);
+            tactical3DState.dialogRect[1] = std::min(tactical3DState.dialogRect[1], v0);
+            tactical3DState.dialogRect[2] = std::max(tactical3DState.dialogRect[2], u1);
+            tactical3DState.dialogRect[3] = std::max(tactical3DState.dialogRect[3], v1);
+        } else {
+            tactical3DState.dialogRect[0] = u0;
+            tactical3DState.dialogRect[1] = v0;
+            tactical3DState.dialogRect[2] = u1;
+            tactical3DState.dialogRect[3] = v1;
+        }
     } else {
         tactical3DState.dialogRect[0] = 0.0f;
         tactical3DState.dialogRect[1] = 0.0f;

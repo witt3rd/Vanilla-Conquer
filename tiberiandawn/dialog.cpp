@@ -287,6 +287,8 @@ void Window_Box(WindowNumberType window, BoxStyleEnum style)
     w = WindowList[window][WINDOWWIDTH];
     h = WindowList[window][WINDOWHEIGHT];
 
+    Video_Set_Tactical_Dialog_Rect(x, y, w, h);
+
     /*
     **	If it is to be rendered to the seenpage, then
     **	hide the mouse.
