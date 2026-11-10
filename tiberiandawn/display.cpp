@@ -104,6 +104,15 @@ struct Tactical3DCameraState
     float fpEyeY{8.0f};
     float fpEyeZ{0.28f};
     bool orbitDragActive{false};
+    bool suppressLeftRelease{false};
+    bool rightDragCandidate{false};
+    bool rightDragged{false};
+    int rightPressX{0};
+    int rightPressY{0};
+    bool fpLeftDragCandidate{false};
+    bool fpLeftDragged{false};
+    int fpLeftPressX{0};
+    int fpLeftPressY{0};
     int lastDragMouseX{0};
     int lastDragMouseY{0};
     bool prevVKeyDown{false};
@@ -112,6 +121,69 @@ struct Tactical3DCameraState
 };
 
 static Tactical3DCameraState g_cam3D;
+
+static bool Is_Camera_Orbit_Input_Active(bool& outAnyMouseBtn, bool& outLeftBtn)
+{
+    bool lBtn = (Keyboard != nullptr && Keyboard->Down(VK_LBUTTON));
+    bool rBtn = (Keyboard != nullptr && Keyboard->Down(VK_RBUTTON));
+    bool mBtn = (Keyboard != nullptr && Keyboard->Down(VK_MBUTTON));
+    bool altOrSpace = (Keyboard != nullptr &&
+                       (Keyboard->Down(KN_LALT) || Keyboard->Down(KN_RALT) || Keyboard->Down(KN_SPACE)));
+#ifdef SDL_BUILD
+    Uint32 sdlBtns = SDL_GetMouseState(nullptr, nullptr);
+    lBtn = lBtn || ((sdlBtns & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0);
+    rBtn = rBtn || ((sdlBtns & SDL_BUTTON(SDL_BUTTON_RIGHT)) != 0);
+    mBtn = mBtn || ((sdlBtns & SDL_BUTTON(SDL_BUTTON_MIDDLE)) != 0);
+    SDL_Keymod sdlMods = SDL_GetModState();
+    altOrSpace = altOrSpace || ((sdlMods & KMOD_ALT) != 0);
+#endif
+    outAnyMouseBtn = (lBtn || rBtn || mBtn);
+    outLeftBtn = lBtn;
+
+    int mx = Get_Mouse_X();
+    int my = Get_Mouse_Y();
+
+    if (rBtn) {
+        if (!g_cam3D.rightDragCandidate) {
+            g_cam3D.rightDragCandidate = true;
+            g_cam3D.rightDragged = false;
+            g_cam3D.rightPressX = mx;
+            g_cam3D.rightPressY = my;
+        } else if (std::abs(mx - g_cam3D.rightPressX) > 4 || std::abs(my - g_cam3D.rightPressY) > 4) {
+            g_cam3D.rightDragged = true;
+        }
+    } else {
+        g_cam3D.rightDragCandidate = false;
+    }
+
+    if (g_cam3D.mode == 1 && lBtn) {
+        if (!g_cam3D.fpLeftDragCandidate) {
+            g_cam3D.fpLeftDragCandidate = true;
+            g_cam3D.fpLeftDragged = false;
+            g_cam3D.fpLeftPressX = mx;
+            g_cam3D.fpLeftPressY = my;
+        } else if (std::abs(mx - g_cam3D.fpLeftPressX) > 4 || std::abs(my - g_cam3D.fpLeftPressY) > 4) {
+            g_cam3D.fpLeftDragged = true;
+        }
+    } else {
+        g_cam3D.fpLeftDragCandidate = false;
+        if (!lBtn) {
+            g_cam3D.fpLeftDragged = false;
+        }
+    }
+
+    bool orbitNow = mBtn || (altOrSpace && (lBtn || rBtn)) || g_cam3D.rightDragged ||
+                    (g_cam3D.mode == 1 && (rBtn || g_cam3D.fpLeftDragged));
+    if (orbitNow) {
+        g_cam3D.suppressLeftRelease = true;
+        return true;
+    }
+    if (g_cam3D.orbitDragActive && outAnyMouseBtn) {
+        g_cam3D.suppressLeftRelease = true;
+        return true;
+    }
+    return false;
+}
 
 static bool Is_Camera_3D_Transformed()
 {
@@ -2760,10 +2832,12 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
 
         int mx = Get_Mouse_X();
         int my = Get_Mouse_Y();
-        bool orbitHold = Keyboard->Down(VK_MBUTTON) ||
-                         (Keyboard->Down(VK_MENU) && (Keyboard->Down(VK_LBUTTON) || Keyboard->Down(VK_RBUTTON))) ||
-                         (g_cam3D.mode == 1 && Keyboard->Down(VK_RBUTTON));
+        bool anyMouseBtn = false;
+        bool leftBtn = false;
+        bool orbitHold = Is_Camera_Orbit_Input_Active(anyMouseBtn, leftBtn);
         if (orbitHold) {
+            IsRubberBand = false;
+            IsTentative = false;
             if (!g_cam3D.orbitDragActive) {
                 g_cam3D.orbitDragActive = true;
                 g_cam3D.lastDragMouseX = mx;
@@ -2787,6 +2861,9 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
             }
         } else {
             g_cam3D.orbitDragActive = false;
+            if (!leftBtn) {
+                g_cam3D.suppressLeftRelease = false;
+            }
         }
 
         if (Keyboard->Down(KN_EQUAL) || Keyboard->Down(VK_ADD)) {
@@ -4664,11 +4741,40 @@ int DisplayClass::TacticalClass::Action(unsigned flags, KeyNumType& key)
             Map.Set_Cursor_Pos(cell);
         }
 
+        bool anyMouseBtn = false;
+        bool leftBtn = false;
+        bool camOrbitActive = Is_Camera_Orbit_Input_Active(anyMouseBtn, leftBtn);
+        if (camOrbitActive || g_cam3D.orbitDragActive || g_cam3D.suppressLeftRelease) {
+            if (Map.IsRubberBand) {
+                Map.Refresh_Band();
+            }
+            Map.IsRubberBand = false;
+            Map.IsTentative = false;
+            if (flags & RIGHTRELEASE) {
+                g_cam3D.rightDragged = false;
+            }
+            if ((flags & LEFTRELEASE) || (!leftBtn && !(flags & LEFTHELD))) {
+                g_cam3D.suppressLeftRelease = false;
+            }
+            return (GadgetClass::Action(0, key));
+        }
+
         /*
-        **	A right mouse button press cancels the current action or selection.
+        **	A stationary right mouse button click cancels the current action or selection,
+        **	whereas right-dragging (> 4px) smoothly orbits the 3D tactical camera.
         */
         if (flags & RIGHTPRESS) {
-            Map.Mouse_Right_Press();
+            g_cam3D.rightDragCandidate = true;
+            g_cam3D.rightDragged = false;
+            g_cam3D.rightPressX = Get_Mouse_X();
+            g_cam3D.rightPressY = Get_Mouse_Y();
+        }
+        if (flags & RIGHTRELEASE) {
+            if (!g_cam3D.rightDragged) {
+                Map.Mouse_Right_Press();
+            }
+            g_cam3D.rightDragged = false;
+            g_cam3D.rightDragCandidate = false;
         }
 
         /*
@@ -5174,6 +5280,18 @@ void DisplayClass::Mouse_Left_Up(bool shadow, ObjectClass* object, ActionType ac
  *=============================================================================================*/
 void DisplayClass::Mouse_Left_Release(CELL cell, int x, int y, ObjectClass* object, ActionType action, bool wwsmall)
 {
+    bool anyMouseBtn = false;
+    bool leftBtn = false;
+    if (Is_Camera_Orbit_Input_Active(anyMouseBtn, leftBtn) || g_cam3D.orbitDragActive || g_cam3D.suppressLeftRelease) {
+        if (IsRubberBand) {
+            Refresh_Band();
+        }
+        IsRubberBand = false;
+        IsTentative = false;
+        g_cam3D.suppressLeftRelease = false;
+        return;
+    }
+
     if (PendingObjectPtr) {
 
         /*
@@ -5334,6 +5452,14 @@ void DisplayClass::Mouse_Left_Release(CELL cell, int x, int y, ObjectClass* obje
  *=============================================================================================*/
 void DisplayClass::Mouse_Left_Press(int x, int y)
 {
+    bool anyMouseBtn = false;
+    bool leftBtn = false;
+    if (Is_Camera_Orbit_Input_Active(anyMouseBtn, leftBtn) || g_cam3D.orbitDragActive || g_cam3D.suppressLeftRelease) {
+        IsRubberBand = false;
+        IsTentative = false;
+        return;
+    }
+
     if (!IsRepairMode && !IsSellMode && !IsTargettingMode && !PendingObject) {
         IsTentative = true;
         BandX = x;
@@ -5360,6 +5486,17 @@ void DisplayClass::Mouse_Left_Press(int x, int y)
  *=============================================================================================*/
 void DisplayClass::Mouse_Left_Held(int x, int y)
 {
+    bool anyMouseBtn = false;
+    bool leftBtn = false;
+    if (Is_Camera_Orbit_Input_Active(anyMouseBtn, leftBtn) || g_cam3D.orbitDragActive || g_cam3D.suppressLeftRelease) {
+        if (IsRubberBand) {
+            Refresh_Band();
+        }
+        IsRubberBand = false;
+        IsTentative = false;
+        return;
+    }
+
     if (IsRubberBand) {
         if (x != NewX || y != NewY) {
             x = Bound(x, 0, Lepton_To_Pixel(TacLeptonWidth) - 1);

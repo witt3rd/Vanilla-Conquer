@@ -2238,7 +2238,9 @@ public:
         Ensure_Framebuffer_Texture(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
 
         // Update SDL Hardware Cursor state once per frame
-        if (Settings.Video.HardwareCursor) {
+        if (tactical3DState.active || ultraMenuState.active) {
+            SDL_ShowCursor(SDL_DISABLE);
+        } else if (Settings.Video.HardwareCursor) {
             if (hwcursor.Pending) {
                 SDL_SetCursor(hwcursor.Pending);
                 if (hwcursor.Current) {
@@ -2271,73 +2273,35 @@ public:
 
             int mx = 0, my = 0;
             Get_Video_Mouse(mx, my);
+            if (const char* envMouse = std::getenv("CNC_TEST_MOUSE")) {
+                int tx = 0, ty = 0;
+                if (std::sscanf(envMouse, "%d,%d", &tx, &ty) == 2) {
+                    mx = tx;
+                    my = ty;
+                }
+            }
             int gw = width > 0 ? width : 640;
             int gh = height > 0 ? height : 400;
 
-            bool showCursor = !Settings.Video.HardwareCursor && (!Get_Mouse_State() || tactical3DState.active);
-            if (showCursor && hwcursor.Raw && hwcursor.W > 0 && hwcursor.H > 0) {
-                int startX = mx - hwcursor.HotX;
-                int startY = my - hwcursor.HotY;
-                const uint8_t* curData = static_cast<const uint8_t*>(hwcursor.Raw);
-
-                if (tactical3DState.active) {
-                    int tacX0 = static_cast<int>(tactical3DState.ubo.view_params0[1] * gw);
-                    int tacY0 = static_cast<int>(tactical3DState.ubo.view_params0[2] * gh);
-                    int tacX1 = static_cast<int>(tactical3DState.ubo.view_params0[3] * gw);
-                    int tacY1 = static_cast<int>(tactical3DState.ubo.view_params1[0] * gh);
-
-                    int dlgX0 = static_cast<int>(tactical3DState.dialogRect[0] * gw);
-                    int dlgY0 = static_cast<int>(tactical3DState.dialogRect[1] * gh);
-                    int dlgX1 = static_cast<int>(tactical3DState.dialogRect[2] * gw);
-                    int dlgY1 = static_cast<int>(tactical3DState.dialogRect[3] * gh);
-                    bool hasDlg = (dlgX1 > dlgX0 && dlgY1 > dlgY0);
-
-                    int tipX0 = static_cast<int>(tactical3DState.ubo.overlay_rects[2][0] * gw);
-                    int tipY0 = static_cast<int>(tactical3DState.ubo.overlay_rects[2][1] * gh);
-                    int tipX1 = static_cast<int>(tactical3DState.ubo.overlay_rects[2][2] * gw);
-                    int tipY1 = static_cast<int>(tactical3DState.ubo.overlay_rects[2][3] * gh);
-                    bool hasTip = (tipX1 > tipX0 && tipY1 > tipY0);
-
-                    float msgV1 = std::fmod(tactical3DState.ubo.view_params3[2], 1.0f);
-                    int msgY1 = (msgV1 > 0.001f) ? static_cast<int>(msgV1 * gh) : -1;
-
-                    for (int cy = -1; cy <= hwcursor.H; ++cy) {
-                        int dy = startY + cy;
-                        if (dy < 0 || dy >= height) continue;
-                        for (int cx = -1; cx <= hwcursor.W; ++cx) {
-                            int dx = startX + cx;
-                            if (dx < 0 || dx >= width) continue;
-
-                            bool inTac = (dx >= tacX0 && dx < tacX1 && dy >= 0 && dy < tacY1);
-                            bool inDlg = hasDlg && (dx >= dlgX0 && dx <= dlgX1 && dy >= dlgY0 && dy <= dlgY1);
-                            bool inTip = hasTip && (dx >= tipX0 && dx <= tipX1 && dy >= tipY0 && dy <= tipY1);
-                            bool inMsg = (msgY1 > 0 && dy <= msgY1);
-                            bool in3DScene = inTac && !inDlg && !inTip && !inMsg;
-
-                            uint8_t cpx = 0;
-                            if (cx >= 0 && cx < hwcursor.W && cy >= 0 && cy < hwcursor.H) {
-                                cpx = curData[cy * hwcursor.W + cx];
-                            }
-
-                            if (in3DScene) {
-                                // Clear legacy 2D terrain bytes inside cursor box so 3D shader composites clean cursor
-                                stagePtr[dy * width + dx] = cpx;
-                            }
-                        }
-                    }
-
-                    if (startX <= 1 && startY <= 1) {
-                        tactical3DState.ubo.overlay_rects[3][0] = -1.0f;
-                        tactical3DState.ubo.overlay_rects[3][1] = -1.0f;
-                        tactical3DState.ubo.overlay_rects[3][2] = -1.0f;
-                        tactical3DState.ubo.overlay_rects[3][3] = -1.0f;
-                    } else {
-                        tactical3DState.ubo.overlay_rects[3][0] = static_cast<float>(startX) / static_cast<float>(gw);
-                        tactical3DState.ubo.overlay_rects[3][1] = static_cast<float>(startY) / static_cast<float>(gh);
-                        tactical3DState.ubo.overlay_rects[3][2] = static_cast<float>(startX + hwcursor.W) / static_cast<float>(gw);
-                        tactical3DState.ubo.overlay_rects[3][3] = static_cast<float>(startY + hwcursor.H) / static_cast<float>(gh);
-                    }
+            if (tactical3DState.active) {
+                // Always lock the native-4K vector tactical cursor to exact (mx, my) tip coordinates
+                if (mx <= 1 && my <= 1) {
+                    tactical3DState.ubo.overlay_rects[3][0] = -1.0f;
+                    tactical3DState.ubo.overlay_rects[3][1] = -1.0f;
+                    tactical3DState.ubo.overlay_rects[3][2] = -1.0f;
+                    tactical3DState.ubo.overlay_rects[3][3] = -1.0f;
                 } else {
+                    tactical3DState.ubo.overlay_rects[3][0] = static_cast<float>(mx) / static_cast<float>(gw);
+                    tactical3DState.ubo.overlay_rects[3][1] = static_cast<float>(my) / static_cast<float>(gh);
+                    tactical3DState.ubo.overlay_rects[3][2] = static_cast<float>(mx + 16) / static_cast<float>(gw);
+                    tactical3DState.ubo.overlay_rects[3][3] = static_cast<float>(my + 16) / static_cast<float>(gh);
+                }
+            } else {
+                bool showCursor = !Settings.Video.HardwareCursor && !Get_Mouse_State();
+                if (showCursor && hwcursor.Raw && hwcursor.W > 0 && hwcursor.H > 0) {
+                    int startX = mx - hwcursor.HotX;
+                    int startY = my - hwcursor.HotY;
+                    const uint8_t* curData = static_cast<const uint8_t*>(hwcursor.Raw);
                     for (int cy = 0; cy < hwcursor.H; ++cy) {
                         int dy = startY + cy;
                         if (dy < 0 || dy >= height) continue;
@@ -2351,11 +2315,6 @@ public:
                         }
                     }
                 }
-            } else if (tactical3DState.active) {
-                tactical3DState.ubo.overlay_rects[3][0] = static_cast<float>(mx) / static_cast<float>(gw);
-                tactical3DState.ubo.overlay_rects[3][1] = static_cast<float>(my) / static_cast<float>(gh);
-                tactical3DState.ubo.overlay_rects[3][2] = -1.0f;
-                tactical3DState.ubo.overlay_rects[3][3] = -1.0f;
             }
         }
 
@@ -2675,7 +2634,7 @@ public:
                         vkDestroyBuffer(vkCtx.device, readBuf, nullptr);
                         vkFreeMemory(vkCtx.device, readMem, nullptr);
 
-                        if (std::getenv("CNC_CAPTURE_EXIT") != nullptr) {
+                        if (vkCtx.headless || std::getenv("CNC_CAPTURE_EXIT") != nullptr) {
                             std::_Exit(0);
                         }
                     }

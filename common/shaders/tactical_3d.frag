@@ -3563,16 +3563,17 @@ void main() {
     // ------------------------------------------------------------------------
     // 11. Composite Crisp 4K Tactical Mouse Cursor
     // ------------------------------------------------------------------------
-    if (curRect.z > curRect.x && curRect.w > curRect.y && !isShowcase) {
-        vec2 cPx = (vUV - curRect.xy) * vec2(640.0, 400.0);
-        if (cPx.x >= -1.0 && cPx.x <= 14.0 && cPx.y >= -1.0 && cPx.y <= 16.0) {
-            bool inOuter = (cPx.x >= -0.8 && cPx.y >= -0.8 && cPx.x <= cPx.y * 0.78 + 1.0 && (cPx.x + cPx.y * 0.62) <= 11.5);
-            bool inInner = (cPx.x >= 0.4 && cPx.y >= 0.6 && cPx.x <= cPx.y * 0.72 && (cPx.x + cPx.y * 0.62) <= 9.8);
-            if (inInner) {
-                mapped = mix(vec3(0.92, 0.98, 1.0), vec3(0.35, 0.95, 0.58), clamp((cPx.x + cPx.y) / 14.0, 0.0, 1.0));
-            } else if (inOuter) {
-                mapped = vec3(0.04, 0.07, 0.09);
-            }
+    if ((curRect.x > 0.0 || curRect.y > 0.0) && !isShowcase) {
+        vec2 cRel = (vUV - mouseUV) * vec2(640.0, 400.0) / 15.0;
+        if (cRel.x >= -0.35 && cRel.x <= 1.15 && cRel.y >= -0.35 && cRel.y <= 1.35) {
+            float dCur = sdTacticalCursor(cRel);
+            float outline = smoothstep(0.075, 0.015, abs(dCur));
+            float fill = smoothstep(0.02, -0.04, dCur);
+            float glow = exp(-max(dCur, 0.0) * 8.0);
+
+            mapped = mix(mapped, vec3(0.08, 0.26, 0.13), fill * 0.88);
+            mapped = mix(mapped, vec3(0.68, 1.0, 0.62), outline * 0.98);
+            mapped += vec3(0.22, 0.90, 0.42) * glow * 0.42;
         }
     }
 

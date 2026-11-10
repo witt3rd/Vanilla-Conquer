@@ -288,7 +288,12 @@ protected:
     {
     public:
         TacticalClass(void)
-            : GadgetClass(0, 0, 0, 0, LEFTPRESS | LEFTRELEASE | LEFTHELD | LEFTUP | RIGHTPRESS, true){};
+            : GadgetClass(0,
+                          0,
+                          0,
+                          0,
+                          LEFTPRESS | LEFTRELEASE | LEFTHELD | LEFTUP | RIGHTPRESS | RIGHTRELEASE | RIGHTHELD,
+                          true){};
 
         int Selection_At_Mouse(unsigned flags, KeyNumType& key);
         int Command_Object(unsigned flags, KeyNumType& key);
