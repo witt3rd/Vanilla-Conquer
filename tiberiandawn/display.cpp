@@ -81,9 +81,143 @@
 #include "ccini.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 extern int ActiveTooltipRect[4];
+
+struct Tactical3DCameraState
+{
+    float yaw{0.0f};
+    float targetYaw{0.0f};
+    float pitch{0.98f};
+    float targetPitch{0.98f};
+    float zoom{1.0f};
+    float targetZoom{1.0f};
+    int mode{0}; // 0 = 3D Orbital Arc RTS Camera, 1 = First-Person / Ground-Level Unit Possession Mode
+    float fpYawOffset{0.0f};
+    float targetFpYawOffset{0.0f};
+    float fpPitch{-0.03f};
+    float targetFpPitch{-0.03f};
+    float fpBaseYaw{0.0f};
+    float fpEyeX{12.0f};
+    float fpEyeY{8.0f};
+    float fpEyeZ{0.28f};
+    bool orbitDragActive{false};
+    int lastDragMouseX{0};
+    int lastDragMouseY{0};
+    bool prevVKeyDown{false};
+    bool prevHomeKeyDown{false};
+    int moveOrderCooldown{0};
+};
+
+static Tactical3DCameraState g_cam3D;
+
+static bool Is_Camera_3D_Transformed()
+{
+    return g_cam3D.mode != 0 || std::fabs(g_cam3D.zoom - 1.0f) > 0.002f || std::fabs(g_cam3D.yaw) > 0.002f ||
+           std::fabs(g_cam3D.pitch - 0.98f) > 0.002f;
+}
+
+static void Transform_TacPixel_To_World_Lepton_Offset(int tacPxX, int tacPxY, int tacLeptonW, int tacLeptonH, int& outLeptonX, int& outLeptonY)
+{
+    int tacW = Lepton_To_Pixel(tacLeptonW);
+    int tacH = Lepton_To_Pixel(tacLeptonH);
+    if (tacW <= 0) tacW = 480;
+    if (tacH <= 0) tacH = 384;
+    if (tacW >= 600) tacW = 640;
+    if (tacH >= 368) tacH = 384;
+
+    float u = static_cast<float>(tacPxX) / static_cast<float>(tacW);
+    float v = static_cast<float>(tacPxY) / static_cast<float>(tacH);
+    float du = u - 0.5f;
+    float dv = v - 0.5f;
+
+    float cellsW = static_cast<float>(tacW) / 24.0f;
+    float cellsH = static_cast<float>(tacH) / 24.0f;
+
+    if (g_cam3D.mode == 1) {
+        // First-Person ground-plane ray intersection
+        float totalYaw = g_cam3D.fpBaseYaw + g_cam3D.fpYawOffset;
+        float cY = std::cos(totalYaw);
+        float sY = std::sin(totalYaw);
+        float cP = std::cos(g_cam3D.fpPitch);
+        float sP = std::sin(g_cam3D.fpPitch);
+        float fovScale = 0.85f * g_cam3D.zoom;
+
+        float sx = du * 2.0f * (cellsW / std::max(1.0f, cellsH)) * fovScale;
+        float sy = -dv * 2.0f * fovScale;
+
+        // Forward = (sY*cP, -cY*cP, sP), Right = (cY, sY, 0), Up = (-sY*sP, cY*sP, cP)
+        float rx = sY * cP + sx * cY - sy * sY * sP;
+        float ry = -cY * cP + sx * sY + sy * cY * sP;
+        float rz = sP + sy * cP;
+
+        float distCells = (rz < -0.02f) ? std::min(18.0f, -g_cam3D.fpEyeZ / rz) : 6.0f;
+        float hitCellX = (g_cam3D.fpEyeX - 1.0f) + rx * distCells;
+        float hitCellY = (g_cam3D.fpEyeY - 1.0f) + ry * distCells;
+        outLeptonX = static_cast<int>(hitCellX * 256.0f);
+        outLeptonY = static_cast<int>(hitCellY * 256.0f);
+        return;
+    }
+
+    float sinP = std::sin(g_cam3D.pitch);
+    float cosP = std::cos(g_cam3D.pitch);
+    constexpr float kSinP0 = 0.83049737f; // sin(0.98)
+    constexpr float kCosP0 = 0.55702005f; // cos(0.98)
+    float tiltFactor = std::max(-0.65f, std::min(3.2f, (cosP / std::max(0.15f, sinP)) - (kCosP0 / kSinP0)));
+    float pitchScaleY = std::max(0.28f, std::min(1.25f, sinP / kSinP0));
+    float denom = std::max(0.18f, 1.0f + dv * 0.55f * tiltFactor);
+
+    float perspX = (du * cellsW * g_cam3D.zoom) / denom;
+    float perspY = (dv * cellsH * g_cam3D.zoom) / (denom * pitchScaleY);
+
+    float cY = std::cos(g_cam3D.yaw);
+    float sY = std::sin(g_cam3D.yaw);
+    float rotX = perspX * cY - perspY * sY;
+    float rotY = perspX * sY + perspY * cY;
+
+    float cellOffX = 0.5f * cellsW + rotX;
+    float cellOffY = 0.5f * cellsH + rotY;
+    outLeptonX = static_cast<int>(cellOffX * 256.0f);
+    outLeptonY = static_cast<int>(cellOffY * 256.0f);
+}
+
+static void Transform_World_Lepton_Offset_To_TacPixel(int leptonOffX, int leptonOffY, int tacLeptonW, int tacLeptonH, int& outTacPxX, int& outTacPxY)
+{
+    int tacW = Lepton_To_Pixel(tacLeptonW);
+    int tacH = Lepton_To_Pixel(tacLeptonH);
+    if (tacW <= 0) tacW = 480;
+    if (tacH <= 0) tacH = 384;
+    if (tacW >= 600) tacW = 640;
+    if (tacH >= 368) tacH = 384;
+
+    float cellsW = static_cast<float>(tacW) / 24.0f;
+    float cellsH = static_cast<float>(tacH) / 24.0f;
+    float dX = (static_cast<float>(leptonOffX) / 256.0f) - 0.5f * cellsW;
+    float dY = (static_cast<float>(leptonOffY) / 256.0f) - 0.5f * cellsH;
+
+    float cY = std::cos(g_cam3D.yaw);
+    float sY = std::sin(g_cam3D.yaw);
+    float perspX = dX * cY + dY * sY;
+    float perspY = -dX * sY + dY * cY;
+
+    float sinP = std::sin(g_cam3D.pitch);
+    float cosP = std::cos(g_cam3D.pitch);
+    constexpr float kSinP0 = 0.83049737f;
+    constexpr float kCosP0 = 0.55702005f;
+    float tiltFactor = std::max(-0.65f, std::min(3.2f, (cosP / std::max(0.15f, sinP)) - (kCosP0 / kSinP0)));
+    float pitchScaleY = std::max(0.28f, std::min(1.25f, sinP / kSinP0));
+    float kTilt = 0.55f * tiltFactor;
+
+    float qY = (perspY * pitchScaleY) / std::max(0.01f, cellsH * g_cam3D.zoom);
+    float dv = qY / std::max(0.15f, 1.0f - qY * kTilt);
+    float denom = std::max(0.18f, 1.0f + dv * kTilt);
+    float du = (perspX * denom) / std::max(0.01f, cellsW * g_cam3D.zoom);
+
+    outTacPxX = static_cast<int>((0.5f + du) * static_cast<float>(tacW));
+    outTacPxY = static_cast<int>((0.5f + dv) * static_cast<float>(tacH));
+}
 
 /*
 **	These layer control elements are used to group the displayable objects
@@ -1172,6 +1306,27 @@ void DisplayClass::AI(KeyNumType& input, int x, int y)
         Mouse_Left_Release(-1, Get_Mouse_X(), Get_Mouse_Y(), NULL, ACTION_NONE);
     }
 
+    // 3D Tactical Camera Mouse-Wheel Zoom & Keyboard Shortcuts (when mouse is over the tactical view)
+    int tacRight = TacPixelX + Lepton_To_Pixel(TacLeptonWidth);
+    if (x < tacRight && y >= TacPixelY) {
+        int plainKey = (input & ~(WWKEY_SHIFT_BIT | WWKEY_CTRL_BIT | WWKEY_ALT_BIT | WWKEY_VK_BIT));
+        if (plainKey == KN_MOUSEWHEEL_UP) {
+            g_cam3D.targetZoom = std::max(0.22f, g_cam3D.targetZoom * 0.88f);
+            IsToRedraw = true;
+            Flag_To_Redraw(false);
+            input = KN_NONE;
+        } else if (plainKey == KN_MOUSEWHEEL_DOWN) {
+            g_cam3D.targetZoom = std::min(1.80f, g_cam3D.targetZoom * 1.13f);
+            IsToRedraw = true;
+            Flag_To_Redraw(false);
+            input = KN_NONE;
+        } else if (plainKey == KN_V || plainKey == KN_Q || plainKey == KN_E || plainKey == KN_PGUP ||
+                   plainKey == KN_PGDN || plainKey == KN_EQUAL || plainKey == KN_MINUS) {
+            // Consumed by live 3D camera controller in Update_Vulkan_Tactical_3D
+            input = KN_NONE;
+        }
+    }
+
     MapClass::AI(input, x, y);
 }
 
@@ -1250,14 +1405,21 @@ void DisplayClass::Remove(ObjectClass const* object, LayerType layer)
  *=============================================================================================*/
 CELL DisplayClass::Click_Cell_Calc(int x, int y)
 {
-    x -= TacPixelX;
-    x = Pixel_To_Lepton(x);
-    y -= TacPixelY;
-    y = Pixel_To_Lepton(y);
+    int tacPxX = x - TacPixelX;
+    int tacPxY = y - TacPixelY;
+    x = Pixel_To_Lepton(tacPxX);
+    y = Pixel_To_Lepton(tacPxY);
 
     // Possibly ignore the view constraints if we aren't using the internal renderer. ST - 4/17/2019 9:06AM
     // if (x < TacLeptonWidth && y < TacLeptonHeight) {
-    if (IgnoreViewConstraints || (x < TacLeptonWidth && y < TacLeptonHeight)) {
+    if (IgnoreViewConstraints || ((unsigned)x < (unsigned)TacLeptonWidth && (unsigned)y < (unsigned)TacLeptonHeight)) {
+        if (Is_Camera_3D_Transformed()) {
+            int lx = 0, ly = 0;
+            Transform_TacPixel_To_World_Lepton_Offset(tacPxX, tacPxY, TacLeptonWidth, TacLeptonHeight, lx, ly);
+            int worldLX = std::max(0, std::min(MAP_CELL_W * 256 - 1, static_cast<int>(Coord_X(TacticalCoord)) + lx));
+            int worldLY = std::max(0, std::min(MAP_CELL_H * 256 - 1, static_cast<int>(Coord_Y(TacticalCoord)) + ly));
+            return Coord_Cell(XY_Coord(worldLX, worldLY));
+        }
 
         COORDINATE tcoord = XY_Coord(Pixel_To_Lepton(Lepton_To_Pixel(Coord_X(TacticalCoord))),
                                      Pixel_To_Lepton(Lepton_To_Pixel(Coord_Y(TacticalCoord))));
@@ -1968,6 +2130,19 @@ bool DisplayClass::Coord_To_Pixel(COORDINATE coord, int& x, int& y)
 bool DisplayClass::Coord_To_Pixel(COORDINATE coord, int& x, int& y)
 {
     if (coord) {
+        if (Is_Camera_3D_Transformed()) {
+            int leptonOffX = static_cast<int>(Coord_X(coord)) - static_cast<int>(Coord_X(TacticalCoord));
+            int leptonOffY = static_cast<int>(Coord_Y(coord)) - static_cast<int>(Coord_Y(TacticalCoord));
+            int tacPxX = 0, tacPxY = 0;
+            Transform_World_Lepton_Offset_To_TacPixel(leptonOffX, leptonOffY, TacLeptonWidth, TacLeptonHeight, tacPxX, tacPxY);
+            if (tacPxX >= -CELL_PIXEL_W * 4 && tacPxX <= Lepton_To_Pixel(TacLeptonWidth) + CELL_PIXEL_W * 4 &&
+                tacPxY >= -CELL_PIXEL_H * 4 && tacPxY <= Lepton_To_Pixel(TacLeptonHeight) + CELL_PIXEL_H * 4) {
+                x = tacPxX;
+                y = tacPxY;
+                return true;
+            }
+            return false;
+        }
         int xtac = Pixel_To_Lepton(Lepton_To_Pixel(Coord_X(TacticalCoord)));
         int xoff = Pixel_To_Lepton(Lepton_To_Pixel(Coord_X(coord)));
 
@@ -2519,6 +2694,197 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         }
     }
 
+    // Poll 3D Orbital Camera & First-Person Unit Possession Controls
+    if (const char* envYaw = std::getenv("CNC_CAM_YAW")) {
+        g_cam3D.yaw = g_cam3D.targetYaw = std::strtof(envYaw, nullptr);
+        g_cam3D.fpYawOffset = g_cam3D.targetFpYawOffset = std::strtof(envYaw, nullptr);
+    }
+    if (const char* envPitch = std::getenv("CNC_CAM_PITCH")) {
+        g_cam3D.pitch = g_cam3D.targetPitch = std::max(0.14f, std::min(1.52f, std::strtof(envPitch, nullptr)));
+        g_cam3D.fpPitch = g_cam3D.targetFpPitch = std::max(-0.52f, std::min(0.62f, std::strtof(envPitch, nullptr)));
+    }
+    if (const char* envZoom = std::getenv("CNC_CAM_ZOOM")) {
+        g_cam3D.zoom = g_cam3D.targetZoom = std::max(0.22f, std::min(1.80f, std::strtof(envZoom, nullptr)));
+    }
+    if (std::getenv("CNC_FIRST_PERSON") != nullptr) {
+        g_cam3D.mode = 1;
+    }
+
+    if (Keyboard != nullptr) {
+        bool vDown = Keyboard->Down(KN_V) || Keyboard->Down(VK_F1);
+        if (vDown && !g_cam3D.prevVKeyDown) {
+            g_cam3D.mode = (g_cam3D.mode == 0) ? 1 : 0;
+            g_cam3D.fpYawOffset = 0.0f;
+            g_cam3D.targetFpYawOffset = 0.0f;
+            g_cam3D.fpPitch = -0.03f;
+            g_cam3D.targetFpPitch = -0.03f;
+            if (g_cam3D.mode == 1 && CurrentObject.Count() == 0) {
+                ObjectClass* bestObj = nullptr;
+                int bestDist = INT_MAX;
+                COORDINATE viewCenter = Coord_Add(TacticalCoord, XY_Coord(TacLeptonWidth / 2, TacLeptonHeight / 2));
+                for (int i = 0; i < Units.Count(); ++i) {
+                    UnitClass* u = Units.Ptr(i);
+                    if (u && u->IsActive && !u->IsInLimbo && u->IsOwnedByPlayer) {
+                        int d = Distance(u->Center_Coord(), viewCenter);
+                        if (d < bestDist) { bestDist = d; bestObj = u; }
+                    }
+                }
+                for (int i = 0; i < Infantry.Count(); ++i) {
+                    InfantryClass* inf = Infantry.Ptr(i);
+                    if (inf && inf->IsActive && !inf->IsInLimbo && inf->IsOwnedByPlayer) {
+                        int d = Distance(inf->Center_Coord(), viewCenter);
+                        if (d < bestDist) { bestDist = d; bestObj = inf; }
+                    }
+                }
+                if (bestObj) {
+                    bestObj->Select();
+                }
+            }
+            IsToRedraw = true;
+            Flag_To_Redraw(false);
+        }
+        g_cam3D.prevVKeyDown = vDown;
+
+        bool homeDown = Keyboard->Down(KN_HOME) || Keyboard->Down(KN_BACKSPACE);
+        if (homeDown && !g_cam3D.prevHomeKeyDown) {
+            g_cam3D.targetYaw = 0.0f;
+            g_cam3D.targetPitch = 0.98f;
+            g_cam3D.targetZoom = 1.0f;
+            g_cam3D.mode = 0;
+            g_cam3D.targetFpYawOffset = 0.0f;
+            g_cam3D.targetFpPitch = -0.03f;
+            IsToRedraw = true;
+            Flag_To_Redraw(false);
+        }
+        g_cam3D.prevHomeKeyDown = homeDown;
+
+        int mx = Get_Mouse_X();
+        int my = Get_Mouse_Y();
+        bool orbitHold = Keyboard->Down(VK_MBUTTON) ||
+                         (Keyboard->Down(VK_MENU) && (Keyboard->Down(VK_LBUTTON) || Keyboard->Down(VK_RBUTTON))) ||
+                         (g_cam3D.mode == 1 && Keyboard->Down(VK_RBUTTON));
+        if (orbitHold) {
+            if (!g_cam3D.orbitDragActive) {
+                g_cam3D.orbitDragActive = true;
+                g_cam3D.lastDragMouseX = mx;
+                g_cam3D.lastDragMouseY = my;
+            } else {
+                int dx = mx - g_cam3D.lastDragMouseX;
+                int dy = my - g_cam3D.lastDragMouseY;
+                g_cam3D.lastDragMouseX = mx;
+                g_cam3D.lastDragMouseY = my;
+                if (dx != 0 || dy != 0) {
+                    if (g_cam3D.mode == 1) {
+                        g_cam3D.targetFpYawOffset += static_cast<float>(dx) * 0.0085f;
+                        g_cam3D.targetFpPitch = std::max(-0.55f, std::min(0.55f, g_cam3D.targetFpPitch - static_cast<float>(dy) * 0.0065f));
+                    } else {
+                        g_cam3D.targetYaw += static_cast<float>(dx) * 0.009f;
+                        g_cam3D.targetPitch = std::max(0.14f, std::min(1.52f, g_cam3D.targetPitch + static_cast<float>(dy) * 0.007f));
+                    }
+                    IsToRedraw = true;
+                    Flag_To_Redraw(false);
+                }
+            }
+        } else {
+            g_cam3D.orbitDragActive = false;
+        }
+
+        if (Keyboard->Down(KN_EQUAL) || Keyboard->Down(VK_ADD)) {
+            g_cam3D.targetZoom = std::max(0.22f, g_cam3D.targetZoom * 0.96f);
+        }
+        if (Keyboard->Down(KN_MINUS) || Keyboard->Down(VK_SUBTRACT)) {
+            g_cam3D.targetZoom = std::min(1.80f, g_cam3D.targetZoom * 1.04f);
+        }
+        if (Keyboard->Down(KN_Q) || Keyboard->Down(VK_NONE_DB)) {
+            if (g_cam3D.mode == 1) g_cam3D.targetFpYawOffset -= 0.045f;
+            else g_cam3D.targetYaw -= 0.045f;
+        }
+        if (Keyboard->Down(KN_E) || Keyboard->Down(VK_NONE_DD)) {
+            if (g_cam3D.mode == 1) g_cam3D.targetFpYawOffset += 0.045f;
+            else g_cam3D.targetYaw += 0.045f;
+        }
+        if (Keyboard->Down(VK_PRIOR)) {
+            if (g_cam3D.mode == 1) g_cam3D.targetFpPitch = std::min(0.55f, g_cam3D.targetFpPitch + 0.03f);
+            else g_cam3D.targetPitch = std::min(1.52f, g_cam3D.targetPitch + 0.035f);
+        }
+        if (Keyboard->Down(VK_NEXT)) {
+            if (g_cam3D.mode == 1) g_cam3D.targetFpPitch = std::max(-0.55f, g_cam3D.targetFpPitch - 0.03f);
+            else g_cam3D.targetPitch = std::max(0.14f, g_cam3D.targetPitch - 0.035f);
+        }
+        if (g_cam3D.mode == 1) {
+            if (Keyboard->Down(KN_A) || Keyboard->Down(KN_LEFT)) {
+                g_cam3D.targetFpYawOffset -= 0.045f;
+            }
+            if (Keyboard->Down(KN_D) || Keyboard->Down(KN_RIGHT)) {
+                g_cam3D.targetFpYawOffset += 0.045f;
+            }
+        }
+    }
+
+    g_cam3D.yaw += (g_cam3D.targetYaw - g_cam3D.yaw) * 0.28f;
+    g_cam3D.pitch += (g_cam3D.targetPitch - g_cam3D.pitch) * 0.28f;
+    g_cam3D.zoom += (g_cam3D.targetZoom - g_cam3D.zoom) * 0.28f;
+    g_cam3D.fpYawOffset += (g_cam3D.targetFpYawOffset - g_cam3D.fpYawOffset) * 0.30f;
+    g_cam3D.fpPitch += (g_cam3D.targetFpPitch - g_cam3D.fpPitch) * 0.30f;
+    if (g_cam3D.moveOrderCooldown > 0) g_cam3D.moveOrderCooldown--;
+
+    // Identify possessed / inspected unit early so First-Person mode can lock tactical window & entity index
+    ObjectClass* possessedObj = (CurrentObject.Count() > 0) ? CurrentObject[0] : nullptr;
+    if (!possessedObj) {
+        UnitClass* bestUnit = nullptr;
+        int bestScore = -1;
+        for (int i = 0; i < Units.Count(); ++i) {
+            UnitClass* u = Units.Ptr(i);
+            if (u && u->IsActive && !u->IsInLimbo && u->IsOwnedByPlayer) {
+                int score = 1;
+                if (*u == UNIT_MTANK || *u == UNIT_HTANK || *u == UNIT_LTANK) score = 10;
+                else if (*u == UNIT_MCV || *u == UNIT_APC || *u == UNIT_JEEP) score = 6;
+                else if (*u == UNIT_HOVER) score = 4;
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestUnit = u;
+                }
+            }
+        }
+        possessedObj = bestUnit;
+        if (!possessedObj) {
+            for (int i = 0; i < Infantry.Count(); ++i) {
+                InfantryClass* inf = Infantry.Ptr(i);
+                if (inf && inf->IsActive && !inf->IsInLimbo && inf->IsOwnedByPlayer) {
+                    possessedObj = inf;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (g_cam3D.mode == 1 && possessedObj != nullptr) {
+        COORDINATE pCoord = possessedObj->Center_Coord();
+        int targetTacX = std::max(Cell_To_Lepton(MapCellX), static_cast<int>(Coord_X(pCoord)) - static_cast<int>(TacLeptonWidth) / 2);
+        int targetTacY = std::max(Cell_To_Lepton(MapCellY), static_cast<int>(Coord_Y(pCoord)) - static_cast<int>(TacLeptonHeight) / 2);
+        Set_Tactical_Position(XY_Coord(targetTacX, targetTacY));
+        TacticalCoord = DesiredTacticalCoord;
+
+        if (Keyboard != nullptr && possessedObj->What_Am_I() != RTTI_BUILDING && PlayerPtr != nullptr &&
+            possessedObj->Owner() == PlayerPtr->Class->House) {
+            int moveDir = 0;
+            if (Keyboard->Down(KN_W) || Keyboard->Down(KN_UP)) moveDir = 1;
+            else if (Keyboard->Down(KN_S) || Keyboard->Down(KN_DOWN)) moveDir = -1;
+            if (moveDir != 0 && g_cam3D.moveOrderCooldown <= 0) {
+                float moveYaw = g_cam3D.fpBaseYaw + g_cam3D.fpYawOffset;
+                int stepLeptons = moveDir * 3 * 256;
+                int destLX = std::max(0, std::min(MAP_CELL_W * 256 - 1, static_cast<int>(Coord_X(pCoord)) + static_cast<int>(std::sin(moveYaw) * stepLeptons)));
+                int destLY = std::max(0, std::min(MAP_CELL_H * 256 - 1, static_cast<int>(Coord_Y(pCoord)) - static_cast<int>(std::cos(moveYaw) * stepLeptons)));
+                CELL destCell = Coord_Cell(XY_Coord(destLX, destLY));
+                OutList.Add(EventClass(possessedObj->As_Target(),
+                                       MISSION_MOVE,
+                                       TARGET_NONE,
+                                       ::As_Target(destCell)));
+                g_cam3D.moveOrderCooldown = 6;
+            }
+        }
+    }
+
     int tacLX = Coord_X(TacticalCoord);
     int tacLY = Coord_Y(TacticalCoord);
     int baseCellX = (tacLX >> 8) - 1;
@@ -2578,7 +2944,7 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
     int lightCount = 0;
 
     auto addPointLight = [&](float wx, float wy, float wz, float rad, float r, float g, float b, float intensity) {
-        if (lightCount >= 32) return;
+        if (lightCount >= 31) return;
         ubo.light_pos_rad[lightCount][0] = wx;
         ubo.light_pos_rad[lightCount][1] = wy;
         ubo.light_pos_rad[lightCount][2] = wz;
@@ -2669,9 +3035,17 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
     auto toLocalCellY = [&](COORDINATE coord) -> float {
         return static_cast<float>(Coord_Y(coord)) / 256.0f - static_cast<float>(baseCellY);
     };
+    const float extra3DMargin = Is_Camera_3D_Transformed() ? 6.0f : 0.0f;
     auto inTacticalMargin = [&](float wx, float wy, float margin) -> bool {
-        return wx >= -margin && wx <= (cellsW + margin + 1.5f) && wy >= -margin && wy <= (cellsH + margin + 1.5f);
+        float m = margin + extra3DMargin;
+        return wx >= -m && wx <= (cellsW + m + 1.5f) && wy >= -m && wy <= (cellsH + m + 1.5f);
     };
+
+    int fpEntIdx = 999;
+    int fpWeaponKind = 0; // 0 = Heavy Tank Cannon, 1 = Recon/Light Turret, 2 = Infantry Rifle, 3 = Aircraft Cockpit
+    g_cam3D.fpEyeX = subCellX + cellsW * 0.5f;
+    g_cam3D.fpEyeY = subCellY + cellsH * 0.5f;
+    g_cam3D.fpEyeZ = 0.28f;
 
     constexpr float kDirToRad = 6.28318530718f / 256.0f;
 
@@ -2847,6 +3221,15 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         ubo.ent_data1[entCount][1] = turYaw;
         ubo.ent_data1[entCount][2] = static_cast<float>(flags) + health;
         ubo.ent_data1[entCount][3] = static_cast<float>(u->Pip_Count());
+        if (g_cam3D.mode == 1 && u == possessedObj) {
+            fpEntIdx = entCount;
+            g_cam3D.fpEyeX = wx;
+            g_cam3D.fpEyeY = wy;
+            g_cam3D.fpEyeZ = (*u == UNIT_HTANK) ? 0.36f : ((*u == UNIT_MTANK || *u == UNIT_LTANK) ? 0.30f : 0.25f);
+            // If MCV is at beach spawn, orient gunner optic SSW (3.04 rad) toward the beachhead troops, cliff & gunboat
+            g_cam3D.fpBaseYaw = (*u == UNIT_MCV) ? 3.04f : turYaw;
+            fpWeaponKind = (*u == UNIT_MTANK || *u == UNIT_HTANK || *u == UNIT_LTANK || *u == UNIT_ARTY || *u == UNIT_MCV) ? 0 : 1;
+        }
         entCount++;
 
         // Render units & infantry riding piggyback on the deck of a Hovercraft (UNIT_HOVER)
@@ -2933,6 +3316,14 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         ubo.ent_data1[entCount][1] = yaw;
         ubo.ent_data1[entCount][2] = static_cast<float>(flags) + health;
         ubo.ent_data1[entCount][3] = 1.0f;
+        if (g_cam3D.mode == 1 && air == possessedObj) {
+            fpEntIdx = entCount;
+            g_cam3D.fpEyeX = wx;
+            g_cam3D.fpEyeY = wy;
+            g_cam3D.fpEyeZ = altCells + 0.16f;
+            g_cam3D.fpBaseYaw = yaw;
+            fpWeaponKind = 3;
+        }
         entCount++;
     }
 
@@ -2971,6 +3362,14 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         ubo.ent_data1[entCount][1] = yaw;
         ubo.ent_data1[entCount][2] = static_cast<float>(flags) + health;
         ubo.ent_data1[entCount][3] = 1.0f;
+        if (g_cam3D.mode == 1 && inf == possessedObj) {
+            fpEntIdx = entCount;
+            g_cam3D.fpEyeX = wx;
+            g_cam3D.fpEyeY = wy;
+            g_cam3D.fpEyeZ = inf->IsProne ? 0.12f : 0.22f;
+            g_cam3D.fpBaseYaw = yaw;
+            fpWeaponKind = 2;
+        }
         entCount++;
     }
 
@@ -3150,6 +3549,14 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         addShowcaseEnt(8.8f,  5.6f, 0.18f,6, ANIM_FBALL1,     0,  0.22f,  0.0f,  0.99f, 0,      0.92f);
         addPointLight(8.8f,   5.6f, 0.45f, 4.8f, 1.0f, 0.48f, 0.08f, 1.45f);
         addPointLight(11.2f,  8.1f, 0.25f, 3.2f, 1.0f, 0.72f, 0.28f, 1.35f);
+        if (g_cam3D.mode == 1) {
+            fpEntIdx = 8; // Lead M1A2 Abrams Tank advancing NW up coastal road
+            g_cam3D.fpEyeX = 9.4f;
+            g_cam3D.fpEyeY = 12.8f;
+            g_cam3D.fpEyeZ = 0.30f;
+            g_cam3D.fpBaseYaw = -0.45f;
+            fpWeaponKind = 0;
+        }
     }
 
     int playerHouseId = PlayerPtr ? Map_House_To_Color_ID(PlayerPtr->Class->House) : 0;
@@ -3294,6 +3701,29 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
 
     packStr32(selName, &ubo.hud_chars[0]);
     packStr32(selRole, &ubo.hud_chars[2]);
+
+    // Pack 3D Orbital Camera & First-Person Unit Possession state into UBO slot 31
+    if (g_cam3D.mode == 1 && fpEntIdx == 999 && possessedObj != nullptr) {
+        COORDINATE pc = possessedObj->Center_Coord();
+        g_cam3D.fpEyeX = toLocalCellX(pc);
+        g_cam3D.fpEyeY = toLocalCellY(pc);
+        g_cam3D.fpEyeZ = 0.28f;
+    }
+    if (g_cam3D.mode == 1) {
+        ubo.light_pos_rad[31][0] = g_cam3D.fpBaseYaw + g_cam3D.fpYawOffset;
+        ubo.light_pos_rad[31][1] = g_cam3D.fpPitch;
+        ubo.light_pos_rad[31][2] = g_cam3D.zoom;
+        ubo.light_pos_rad[31][3] = 1.0f;
+    } else {
+        ubo.light_pos_rad[31][0] = g_cam3D.yaw;
+        ubo.light_pos_rad[31][1] = g_cam3D.pitch;
+        ubo.light_pos_rad[31][2] = g_cam3D.zoom;
+        ubo.light_pos_rad[31][3] = 0.0f;
+    }
+    ubo.light_col_int[31][0] = g_cam3D.fpEyeX;
+    ubo.light_col_int[31][1] = g_cam3D.fpEyeY;
+    ubo.light_col_int[31][2] = g_cam3D.fpEyeZ;
+    ubo.light_col_int[31][3] = static_cast<float>(fpEntIdx) + static_cast<float>(fpWeaponKind) * 0.1f;
 
     Video_Set_Tactical_3D_State(true, &ubo);
 }
@@ -3593,10 +4023,10 @@ COORDINATE DisplayClass::Pixel_To_Coord(int x, int y)
     **	Normalize the pixel coorindates to be relative to the upper left corner
     **	of the tactical map. The coordinates are expressed in leptons.
     */
-    x -= TacPixelX;
-    x = Pixel_To_Lepton(x);
-    y -= TacPixelY;
-    y = Pixel_To_Lepton(y);
+    int tacPxX = x - TacPixelX;
+    int tacPxY = y - TacPixelY;
+    x = Pixel_To_Lepton(tacPxX);
+    y = Pixel_To_Lepton(tacPxY);
 
     /*
     **	If pixel coordinate is over the tactical map, then translate it into a coordinate
@@ -3605,6 +4035,13 @@ COORDINATE DisplayClass::Pixel_To_Coord(int x, int y)
     // Possibly ignore the view constraints if we aren't using the internal renderer. ST - 4/17/2019 9:06AM
     // if (x < TacLeptonWidth && y < TacLeptonHeight) {
     if (IgnoreViewConstraints || ((unsigned)x < (unsigned)TacLeptonWidth && (unsigned)y < (unsigned)TacLeptonHeight)) {
+        if (Is_Camera_3D_Transformed()) {
+            int lx = 0, ly = 0;
+            Transform_TacPixel_To_World_Lepton_Offset(tacPxX, tacPxY, TacLeptonWidth, TacLeptonHeight, lx, ly);
+            int worldLX = std::max(0, std::min(MAP_CELL_W * 256 - 1, static_cast<int>(Coord_X(TacticalCoord)) + lx));
+            int worldLY = std::max(0, std::min(MAP_CELL_H * 256 - 1, static_cast<int>(Coord_Y(TacticalCoord)) + ly));
+            return XY_Coord(worldLX, worldLY);
+        }
         return (Coord_Add(TacticalCoord, XY_Coord(x, y)));
     }
     return (0);
@@ -3870,6 +4307,12 @@ static bool should_exclude_from_selection(ObjectClass* obj)
 void DisplayClass::Select_These(COORDINATE coord1, COORDINATE coord2, bool additive)
 {
     COORDINATE tcoord = TacticalCoord; // Coord_Whole(Cell_Coord(TacticalCell));
+    int rawPxX1 = Lepton_To_Pixel(Coord_X(coord1));
+    int rawPxY1 = Lepton_To_Pixel(Coord_Y(coord1));
+    int rawPxX2 = Lepton_To_Pixel(Coord_X(coord2));
+    int rawPxY2 = Lepton_To_Pixel(Coord_Y(coord2));
+    if (rawPxX1 > rawPxX2) std::swap(rawPxX1, rawPxX2);
+    if (rawPxY1 > rawPxY2) std::swap(rawPxY1, rawPxY2);
 
     coord1 = Coord_Add(tcoord, coord1);
     coord2 = Coord_Add(tcoord, coord2);
@@ -3907,13 +4350,18 @@ void DisplayClass::Select_These(COORDINATE coord1, COORDINATE coord2, bool addit
         int x = Coord_X(ocoord);
         int y = Coord_Y(ocoord);
 
+        bool inBox = (x >= x1 && x <= x2 && y >= y1 && y <= y2);
+        if (Is_Camera_3D_Transformed()) {
+            int sx = 0, sy = 0;
+            inBox = Coord_To_Pixel(ocoord, sx, sy) && (sx >= rawPxX1 && sx <= rawPxX2 && sy >= rawPxY1 && sy <= rawPxY2);
+        }
+
         /*
         **	Only try to select objects that are owned by the player, are allowed to be
         **	selected, and are within the bouding box.
         */
         if (obj->Class_Of().IsSelectable && obj->What_Am_I() != RTTI_BUILDING
-            && (!obj->Is_Techno() || !((TechnoClass*)obj)->Is_Cloaked(PlayerPtr)) && x >= x1 && x <= x2 && y >= y1
-            && y <= y2) {
+            && (!obj->Is_Techno() || !((TechnoClass*)obj)->Is_Cloaked(PlayerPtr)) && inBox) {
             bool old_allow_voice = AllowVoice;
             bool is_player_controlled = obj->Owner() == PlayerPtr->Class->House;
             AllowVoice &= is_player_controlled;

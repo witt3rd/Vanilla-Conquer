@@ -86,7 +86,10 @@ void WWKeyboardClassSDL2::Fill_Buffer_From_System(void)
             case SDL_WINDOWEVENT_HIDDEN:
             case SDL_WINDOWEVENT_MINIMIZED:
             case SDL_WINDOWEVENT_FOCUS_LOST:
-                Focus_Loss();
+                if (std::getenv("CNC_CAPTURE_PATH") == nullptr && std::getenv("CNC_CAPTURE_FRAME") == nullptr &&
+                    std::getenv("CNC_HEADLESS") == nullptr) {
+                    Focus_Loss();
+                }
                 break;
             }
             break;

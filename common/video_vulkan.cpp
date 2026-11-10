@@ -267,10 +267,12 @@ struct VulkanBackendContext
     VkQueue graphicsQueue{VK_NULL_HANDLE};
 
     VkSwapchainKHR swapchain{VK_NULL_HANDLE};
+    bool headless{false};
     VkFormat swapchainFormat{VK_FORMAT_B8G8R8A8_UNORM};
     uint32_t swapchainWidth{0};
     uint32_t swapchainHeight{0};
     std::vector<VkImage> swapchainImages;
+    std::vector<VkDeviceMemory> headlessMemories;
     std::vector<VkImageView> swapchainImageViews;
     std::vector<VkSemaphore> renderCompleteSemaphores;
 
@@ -1049,6 +1051,16 @@ static void Destroy_Swapchain()
         if (view) vkDestroyImageView(vkCtx.device, view, nullptr);
     }
     vkCtx.swapchainImageViews.clear();
+
+    if (vkCtx.headless) {
+        for (VkImage img : vkCtx.swapchainImages) {
+            if (img) vkDestroyImage(vkCtx.device, img, nullptr);
+        }
+        for (VkDeviceMemory mem : vkCtx.headlessMemories) {
+            if (mem) vkFreeMemory(vkCtx.device, mem, nullptr);
+        }
+        vkCtx.headlessMemories.clear();
+    }
     vkCtx.swapchainImages.clear();
 
     if (vkCtx.swapchain) {
@@ -1059,97 +1071,165 @@ static void Destroy_Swapchain()
 
 static bool Create_Swapchain(uint32_t reqWidth, uint32_t reqHeight)
 {
-    VkSurfaceCapabilitiesKHR caps{};
-    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vkCtx.physicalDevice, vkCtx.surface, &caps) != VK_SUCCESS) {
-        return false;
-    }
-
-    uint32_t formatCount = 0;
-    vkGetPhysicalDeviceSurfaceFormatsKHR(vkCtx.physicalDevice, vkCtx.surface, &formatCount, nullptr);
-    if (formatCount == 0) return false;
-    std::vector<VkSurfaceFormatKHR> formats(formatCount);
-    vkGetPhysicalDeviceSurfaceFormatsKHR(vkCtx.physicalDevice, vkCtx.surface, &formatCount, formats.data());
-
-    // Prefer UNORM format so 6-bit->8-bit VGA colors are presented directly without double gamma curve
-    VkSurfaceFormatKHR chosenFormat = formats[0];
-    for (const auto& fmt : formats) {
-        if ((fmt.format == VK_FORMAT_B8G8R8A8_UNORM || fmt.format == VK_FORMAT_R8G8B8A8_UNORM) &&
-            fmt.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-            chosenFormat = fmt;
-            break;
-        }
-    }
-    vkCtx.swapchainFormat = chosenFormat.format;
-
     VkExtent2D extent{};
-    if (caps.currentExtent.width != UINT32_MAX) {
-        extent = caps.currentExtent;
+
+    if (vkCtx.headless) {
+        vkCtx.swapchainFormat = VK_FORMAT_B8G8R8A8_UNORM;
+        extent.width = reqWidth > 0 ? reqWidth : 1920;
+        extent.height = reqHeight > 0 ? reqHeight : 1200;
+        vkCtx.swapchainWidth = extent.width;
+        vkCtx.swapchainHeight = extent.height;
+
+        const uint32_t actualImages = kMaxFramesInFlight;
+        vkCtx.swapchainImages.resize(actualImages, VK_NULL_HANDLE);
+        vkCtx.headlessMemories.resize(actualImages, VK_NULL_HANDLE);
+        vkCtx.swapchainImageViews.resize(actualImages, VK_NULL_HANDLE);
+        vkCtx.renderCompleteSemaphores.resize(actualImages, VK_NULL_HANDLE);
+
+        for (uint32_t i = 0; i < actualImages; ++i) {
+            VkImageCreateInfo imgInfo{};
+            imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            imgInfo.imageType = VK_IMAGE_TYPE_2D;
+            imgInfo.format = vkCtx.swapchainFormat;
+            imgInfo.extent = {extent.width, extent.height, 1};
+            imgInfo.mipLevels = 1;
+            imgInfo.arrayLayers = 1;
+            imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+            imgInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                            VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+            if (vkCreateImage(vkCtx.device, &imgInfo, nullptr, &vkCtx.swapchainImages[i]) != VK_SUCCESS) {
+                return false;
+            }
+
+            VkMemoryRequirements memReqs{};
+            vkGetImageMemoryRequirements(vkCtx.device, vkCtx.swapchainImages[i], &memReqs);
+            VkMemoryAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            allocInfo.allocationSize = memReqs.size;
+            allocInfo.memoryTypeIndex = Find_Memory_Type(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            if (allocInfo.memoryTypeIndex == UINT32_MAX ||
+                vkAllocateMemory(vkCtx.device, &allocInfo, nullptr, &vkCtx.headlessMemories[i]) != VK_SUCCESS) {
+                return false;
+            }
+            vkBindImageMemory(vkCtx.device, vkCtx.swapchainImages[i], vkCtx.headlessMemories[i], 0);
+
+            VkImageViewCreateInfo viewInfo{};
+            viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            viewInfo.image = vkCtx.swapchainImages[i];
+            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            viewInfo.format = vkCtx.swapchainFormat;
+            viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            viewInfo.subresourceRange.baseMipLevel = 0;
+            viewInfo.subresourceRange.levelCount = 1;
+            viewInfo.subresourceRange.baseArrayLayer = 0;
+            viewInfo.subresourceRange.layerCount = 1;
+
+            if (vkCreateImageView(vkCtx.device, &viewInfo, nullptr, &vkCtx.swapchainImageViews[i]) != VK_SUCCESS) {
+                return false;
+            }
+
+            VkSemaphoreCreateInfo semInfo{};
+            semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+            if (vkCreateSemaphore(vkCtx.device, &semInfo, nullptr, &vkCtx.renderCompleteSemaphores[i]) != VK_SUCCESS) {
+                return false;
+            }
+        }
     } else {
-        extent.width = std::max(caps.minImageExtent.width, std::min(reqWidth, caps.maxImageExtent.width));
-        extent.height = std::max(caps.minImageExtent.height, std::min(reqHeight, caps.maxImageExtent.height));
-    }
-
-    if (extent.width == 0 || extent.height == 0) {
-        return false;
-    }
-
-    uint32_t imageCount = caps.minImageCount + 1;
-    if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) {
-        imageCount = caps.maxImageCount;
-    }
-
-    VkSwapchainCreateInfoKHR scInfo{};
-    scInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-    scInfo.surface = vkCtx.surface;
-    scInfo.minImageCount = imageCount;
-    scInfo.imageFormat = chosenFormat.format;
-    scInfo.imageColorSpace = chosenFormat.colorSpace;
-    scInfo.imageExtent = extent;
-    scInfo.imageArrayLayers = 1;
-    scInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                        (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-    scInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    scInfo.preTransform = caps.currentTransform;
-    scInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    scInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR;
-    scInfo.clipped = VK_TRUE;
-    scInfo.oldSwapchain = VK_NULL_HANDLE;
-
-    if (vkCreateSwapchainKHR(vkCtx.device, &scInfo, nullptr, &vkCtx.swapchain) != VK_SUCCESS) {
-        return false;
-    }
-
-    vkCtx.swapchainWidth = extent.width;
-    vkCtx.swapchainHeight = extent.height;
-
-    uint32_t actualImages = 0;
-    vkGetSwapchainImagesKHR(vkCtx.device, vkCtx.swapchain, &actualImages, nullptr);
-    vkCtx.swapchainImages.resize(actualImages);
-    vkGetSwapchainImagesKHR(vkCtx.device, vkCtx.swapchain, &actualImages, vkCtx.swapchainImages.data());
-
-    vkCtx.swapchainImageViews.resize(actualImages, VK_NULL_HANDLE);
-    vkCtx.renderCompleteSemaphores.resize(actualImages, VK_NULL_HANDLE);
-
-    for (uint32_t i = 0; i < actualImages; ++i) {
-        VkImageViewCreateInfo viewInfo{};
-        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image = vkCtx.swapchainImages[i];
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = vkCtx.swapchainFormat;
-        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        viewInfo.subresourceRange.baseMipLevel = 0;
-        viewInfo.subresourceRange.levelCount = 1;
-        viewInfo.subresourceRange.baseArrayLayer = 0;
-        viewInfo.subresourceRange.layerCount = 1;
-
-        if (vkCreateImageView(vkCtx.device, &viewInfo, nullptr, &vkCtx.swapchainImageViews[i]) != VK_SUCCESS) {
+        VkSurfaceCapabilitiesKHR caps{};
+        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vkCtx.physicalDevice, vkCtx.surface, &caps) != VK_SUCCESS) {
             return false;
         }
 
-        VkSemaphoreCreateInfo semInfo{};
-        semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-        if (vkCreateSemaphore(vkCtx.device, &semInfo, nullptr, &vkCtx.renderCompleteSemaphores[i]) != VK_SUCCESS) {
+        uint32_t formatCount = 0;
+        vkGetPhysicalDeviceSurfaceFormatsKHR(vkCtx.physicalDevice, vkCtx.surface, &formatCount, nullptr);
+        if (formatCount == 0) return false;
+        std::vector<VkSurfaceFormatKHR> formats(formatCount);
+        vkGetPhysicalDeviceSurfaceFormatsKHR(vkCtx.physicalDevice, vkCtx.surface, &formatCount, formats.data());
+
+        // Prefer UNORM format so 6-bit->8-bit VGA colors are presented directly without double gamma curve
+        VkSurfaceFormatKHR chosenFormat = formats[0];
+        for (const auto& fmt : formats) {
+            if ((fmt.format == VK_FORMAT_B8G8R8A8_UNORM || fmt.format == VK_FORMAT_R8G8B8A8_UNORM) &&
+                fmt.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+                chosenFormat = fmt;
+                break;
+            }
+        }
+        vkCtx.swapchainFormat = chosenFormat.format;
+
+        if (caps.currentExtent.width != UINT32_MAX) {
+            extent = caps.currentExtent;
+        } else {
+            extent.width = std::max(caps.minImageExtent.width, std::min(reqWidth, caps.maxImageExtent.width));
+            extent.height = std::max(caps.minImageExtent.height, std::min(reqHeight, caps.maxImageExtent.height));
+        }
+
+        if (extent.width == 0 || extent.height == 0) {
             return false;
+        }
+
+        uint32_t imageCount = caps.minImageCount + 1;
+        if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) {
+            imageCount = caps.maxImageCount;
+        }
+
+        VkSwapchainCreateInfoKHR scInfo{};
+        scInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+        scInfo.surface = vkCtx.surface;
+        scInfo.minImageCount = imageCount;
+        scInfo.imageFormat = chosenFormat.format;
+        scInfo.imageColorSpace = chosenFormat.colorSpace;
+        scInfo.imageExtent = extent;
+        scInfo.imageArrayLayers = 1;
+        scInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                            (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+        scInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        scInfo.preTransform = caps.currentTransform;
+        scInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        scInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+        scInfo.clipped = VK_TRUE;
+        scInfo.oldSwapchain = VK_NULL_HANDLE;
+
+        if (vkCreateSwapchainKHR(vkCtx.device, &scInfo, nullptr, &vkCtx.swapchain) != VK_SUCCESS) {
+            return false;
+        }
+
+        vkCtx.swapchainWidth = extent.width;
+        vkCtx.swapchainHeight = extent.height;
+
+        uint32_t actualImages = 0;
+        vkGetSwapchainImagesKHR(vkCtx.device, vkCtx.swapchain, &actualImages, nullptr);
+        vkCtx.swapchainImages.resize(actualImages);
+        vkGetSwapchainImagesKHR(vkCtx.device, vkCtx.swapchain, &actualImages, vkCtx.swapchainImages.data());
+
+        vkCtx.swapchainImageViews.resize(actualImages, VK_NULL_HANDLE);
+        vkCtx.renderCompleteSemaphores.resize(actualImages, VK_NULL_HANDLE);
+
+        for (uint32_t i = 0; i < actualImages; ++i) {
+            VkImageViewCreateInfo viewInfo{};
+            viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            viewInfo.image = vkCtx.swapchainImages[i];
+            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            viewInfo.format = vkCtx.swapchainFormat;
+            viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            viewInfo.subresourceRange.baseMipLevel = 0;
+            viewInfo.subresourceRange.levelCount = 1;
+            viewInfo.subresourceRange.baseArrayLayer = 0;
+            viewInfo.subresourceRange.layerCount = 1;
+
+            if (vkCreateImageView(vkCtx.device, &viewInfo, nullptr, &vkCtx.swapchainImageViews[i]) != VK_SUCCESS) {
+                return false;
+            }
+
+            VkSemaphoreCreateInfo semInfo{};
+            semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+            if (vkCreateSemaphore(vkCtx.device, &semInfo, nullptr, &vkCtx.renderCompleteSemaphores[i]) != VK_SUCCESS) {
+                return false;
+            }
         }
     }
 
@@ -1330,8 +1410,10 @@ static bool Initialize_Vulkan_Backend(int gameW, int gameH)
         return false;
     }
 
-    if (!SDL_Vulkan_CreateSurface(window, vkCtx.instance, &vkCtx.surface)) {
-        return false;
+    if (!vkCtx.headless) {
+        if (!SDL_Vulkan_CreateSurface(window, vkCtx.instance, &vkCtx.surface)) {
+            return false;
+        }
     }
 
     uint32_t gpuCount = 0;
@@ -1348,8 +1430,10 @@ static bool Initialize_Vulkan_Backend(int gameW, int gameH)
         vkGetPhysicalDeviceQueueFamilyProperties(gpu, &qCount, qProps.data());
 
         for (uint32_t i = 0; i < qCount; ++i) {
-            VkBool32 presentSupport = VK_FALSE;
-            vkGetPhysicalDeviceSurfaceSupportKHR(gpu, i, vkCtx.surface, &presentSupport);
+            VkBool32 presentSupport = vkCtx.headless ? VK_TRUE : VK_FALSE;
+            if (!vkCtx.headless && vkCtx.surface) {
+                vkGetPhysicalDeviceSurfaceSupportKHR(gpu, i, vkCtx.surface, &presentSupport);
+            }
             if ((qProps[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && presentSupport) {
                 vkCtx.physicalDevice = gpu;
                 vkCtx.graphicsQueueFamily = i;
@@ -1393,8 +1477,8 @@ static bool Initialize_Vulkan_Backend(int gameW, int gameH)
     devInfo.pNext = &features13;
     devInfo.queueCreateInfoCount = 1;
     devInfo.pQueueCreateInfos = &qCreateInfo;
-    devInfo.enabledExtensionCount = 1;
-    devInfo.ppEnabledExtensionNames = devExtensions;
+    devInfo.enabledExtensionCount = vkCtx.headless ? 0 : 1;
+    devInfo.ppEnabledExtensionNames = vkCtx.headless ? nullptr : devExtensions;
 
     if (vkCreateDevice(vkCtx.physicalDevice, &devInfo, nullptr, &vkCtx.device) != VK_SUCCESS) {
         return false;
@@ -1403,10 +1487,15 @@ static bool Initialize_Vulkan_Backend(int gameW, int gameH)
     vkGetDeviceQueue(vkCtx.device, vkCtx.graphicsQueueFamily, 0, &vkCtx.graphicsQueue);
 
     int drawW = 0, drawH = 0;
-    SDL_Vulkan_GetDrawableSize(window, &drawW, &drawH);
-    if (drawW <= 0 || drawH <= 0) {
-        drawW = gameW;
-        drawH = gameH;
+    if (vkCtx.headless) {
+        drawW = 1920;
+        drawH = 1200;
+    } else {
+        SDL_Vulkan_GetDrawableSize(window, &drawW, &drawH);
+        if (drawW <= 0 || drawH <= 0) {
+            drawW = gameW;
+            drawH = gameH;
+        }
     }
 
     if (!Create_Swapchain(static_cast<uint32_t>(drawW), static_cast<uint32_t>(drawH))) {
@@ -1873,7 +1962,10 @@ static void Execute_Pass3_NativeUI(VkCommandBuffer cmd, uint32_t imageIndex)
 static void Update_HWCursor_Settings()
 {
     int win_w = 0, win_h = 0;
-    if (window) {
+    if (vkCtx.headless) {
+        win_w = 1920;
+        win_h = 1200;
+    } else if (window) {
         SDL_Vulkan_GetDrawableSize(window, &win_w, &win_h);
         if (win_w <= 0 || win_h <= 0) {
             SDL_GetWindowSize(window, &win_w, &win_h);
@@ -2115,10 +2207,15 @@ public:
         }
 
         int cur_w = 0, cur_h = 0;
-        SDL_Vulkan_GetDrawableSize(window, &cur_w, &cur_h);
-        if (cur_w <= 0 || cur_h <= 0) {
-            // Window is minimized (0x0); skip rendering safely
-            return;
+        if (vkCtx.headless) {
+            cur_w = 1920;
+            cur_h = 1200;
+        } else {
+            SDL_Vulkan_GetDrawableSize(window, &cur_w, &cur_h);
+            if (cur_w <= 0 || cur_h <= 0) {
+                // Window is minimized (0x0); skip rendering safely
+                return;
+            }
         }
 
         if (cur_w != last_out_w || cur_h != last_out_h ||
@@ -2320,20 +2417,24 @@ public:
         }
 
         uint32_t imageIndex = 0;
-        VkResult acq = vkAcquireNextImageKHR(
-            vkCtx.device, vkCtx.swapchain, UINT64_MAX, fr.imageAcquiredSemaphore, VK_NULL_HANDLE, &imageIndex);
+        if (vkCtx.headless) {
+            imageIndex = frameIdx % static_cast<uint32_t>(vkCtx.swapchainImages.size());
+        } else {
+            VkResult acq = vkAcquireNextImageKHR(
+                vkCtx.device, vkCtx.swapchain, UINT64_MAX, fr.imageAcquiredSemaphore, VK_NULL_HANDLE, &imageIndex);
 
-        if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
-            vkCtx.requireSwapchainRecreate = true;
-            vkCtx.frameIndex--;
-            vkCtx.nextSignalValue--;
-            return;
-        } else if (acq == VK_SUBOPTIMAL_KHR) {
-            vkCtx.requireSwapchainRecreate = true;
-        } else if (acq != VK_SUCCESS) {
-            vkCtx.frameIndex--;
-            vkCtx.nextSignalValue--;
-            return;
+            if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
+                vkCtx.requireSwapchainRecreate = true;
+                vkCtx.frameIndex--;
+                vkCtx.nextSignalValue--;
+                return;
+            } else if (acq == VK_SUBOPTIMAL_KHR) {
+                vkCtx.requireSwapchainRecreate = true;
+            } else if (acq != VK_SUCCESS) {
+                vkCtx.frameIndex--;
+                vkCtx.nextSignalValue--;
+                return;
+            }
         }
 
         vkResetCommandPool(vkCtx.device, fr.commandPool, 0);
@@ -2426,15 +2527,16 @@ public:
         Execute_Pass2_SoftwareFramebuffer(fr.commandBuffer, imageIndex, frameIdx);
         Execute_Pass3_NativeUI(fr.commandBuffer, imageIndex);
 
-        // 4. Transition swapchain image to PRESENT_SRC_KHR
+        // 4. Transition swapchain image to PRESENT_SRC_KHR (or TRANSFER_SRC_OPTIMAL if headless)
+        VkImageLayout finalLayout = vkCtx.headless ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
         VkImageMemoryBarrier2 swapToPresent{};
         swapToPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
         swapToPresent.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
         swapToPresent.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-        swapToPresent.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
-        swapToPresent.dstAccessMask = 0;
+        swapToPresent.dstStageMask = vkCtx.headless ? VK_PIPELINE_STAGE_2_TRANSFER_BIT : VK_PIPELINE_STAGE_2_NONE;
+        swapToPresent.dstAccessMask = vkCtx.headless ? VK_ACCESS_2_TRANSFER_READ_BIT : 0;
         swapToPresent.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        swapToPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        swapToPresent.newLayout = finalLayout;
         swapToPresent.image = vkCtx.swapchainImages[imageIndex];
         swapToPresent.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
@@ -2467,12 +2569,12 @@ public:
 
         VkSubmitInfo2 submitInfo{};
         submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-        submitInfo.waitSemaphoreInfoCount = 1;
-        submitInfo.pWaitSemaphoreInfos = &waitSemInfo;
+        submitInfo.waitSemaphoreInfoCount = vkCtx.headless ? 0 : 1;
+        submitInfo.pWaitSemaphoreInfos = vkCtx.headless ? nullptr : &waitSemInfo;
         submitInfo.commandBufferInfoCount = 1;
         submitInfo.pCommandBufferInfos = &cmdSubmitInfo;
-        submitInfo.signalSemaphoreInfoCount = 2;
-        submitInfo.pSignalSemaphoreInfos = signalSemInfos;
+        submitInfo.signalSemaphoreInfoCount = vkCtx.headless ? 1 : 2;
+        submitInfo.pSignalSemaphoreInfos = vkCtx.headless ? &signalSemInfos[1] : signalSemInfos;
 
         vkQueueSubmit2(vkCtx.graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
 
@@ -2511,7 +2613,7 @@ public:
                         toSrc.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
                         toSrc.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
                         toSrc.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-                        toSrc.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+                        toSrc.oldLayout = finalLayout;
                         toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
                         toSrc.image = vkCtx.swapchainImages[imageIndex];
                         toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
@@ -2538,7 +2640,7 @@ public:
                         backPres.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
                         backPres.dstAccessMask = 0;
                         backPres.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                        backPres.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+                        backPres.newLayout = finalLayout;
                         vkCmdPipelineBarrier2(fr.commandBuffer, &depSrc);
 
                         vkEndCommandBuffer(fr.commandBuffer);
@@ -2581,17 +2683,19 @@ public:
             }
         }
 
-        VkPresentInfoKHR presentInfo{};
-        presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-        presentInfo.waitSemaphoreCount = 1;
-        presentInfo.pWaitSemaphores = &vkCtx.renderCompleteSemaphores[imageIndex];
-        presentInfo.swapchainCount = 1;
-        presentInfo.pSwapchains = &vkCtx.swapchain;
-        presentInfo.pImageIndices = &imageIndex;
+        if (!vkCtx.headless) {
+            VkPresentInfoKHR presentInfo{};
+            presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+            presentInfo.waitSemaphoreCount = 1;
+            presentInfo.pWaitSemaphores = &vkCtx.renderCompleteSemaphores[imageIndex];
+            presentInfo.swapchainCount = 1;
+            presentInfo.pSwapchains = &vkCtx.swapchain;
+            presentInfo.pImageIndices = &imageIndex;
 
-        VkResult pres = vkQueuePresentKHR(vkCtx.graphicsQueue, &presentInfo);
-        if (pres == VK_ERROR_OUT_OF_DATE_KHR || pres == VK_SUBOPTIMAL_KHR) {
-            vkCtx.requireSwapchainRecreate = true;
+            VkResult pres = vkQueuePresentKHR(vkCtx.graphicsQueue, &presentInfo);
+            if (pres == VK_ERROR_OUT_OF_DATE_KHR || pres == VK_SUBOPTIMAL_KHR) {
+                vkCtx.requireSwapchainRecreate = true;
+            }
         }
     }
 
@@ -2628,11 +2732,18 @@ bool Set_Video_Mode(int w, int h, int bits_per_pixel)
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
     SDL_ShowCursor(SDL_DISABLE);
 
+    vkCtx.headless = (std::getenv("CNC_CAPTURE_PATH") != nullptr || std::getenv("CNC_CAPTURE_FRAME") != nullptr ||
+                      std::getenv("CNC_HEADLESS") != nullptr);
+
     int win_w = w;
     int win_h = h;
     Uint32 win_flags = SDL_WINDOW_VULKAN;
 
-    if (!Settings.Video.Windowed) {
+    if (vkCtx.headless) {
+        win_w = 1920;
+        win_h = 1200;
+        win_flags |= SDL_WINDOW_HIDDEN;
+    } else if (!Settings.Video.Windowed) {
         if (Settings.Video.Width < w || Settings.Video.Height < h) {
             win_w = w * 2;
             win_h = h * 2;

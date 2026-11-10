@@ -118,6 +118,11 @@ int SoundImp_Get_Sample_Free_Buffer_Count(SampleTrackerTypeImp* st)
 
 bool SoundImp_Init(int bits_per_sample, bool stereo, int rate, bool reverse_channels)
 {
+    if (std::getenv("CNC_CAPTURE_PATH") != nullptr || std::getenv("CNC_CAPTURE_FRAME") != nullptr ||
+        std::getenv("CNC_HEADLESS") != nullptr || std::getenv("CNC_MUTE") != nullptr) {
+        return false;
+    }
+
     ALCdevice* device = alcOpenDevice(nullptr);
 
     if (device == nullptr) {

@@ -1718,6 +1718,8 @@ void main() {
 
     // ------------------------------------------------------------------------
     // 2. Compute Exact World-Cell Coordinates in the 3D Tactical Viewport
+    //    Supports Mode 0 (Default & 3D Orbital Zoom / 360-Spin / Arc-Tilt)
+    //    and Mode 1 (Ground-Level First-Person Unit Possession)
     // ------------------------------------------------------------------------
     vec2 tacUV = (vUV - tacRect.xy) / max(tacRect.zw - tacRect.xy, vec2(1e-4));
     vec2 subCell = uTac.view_params1.yz;
@@ -1725,19 +1727,104 @@ void main() {
     vec2 originCell = uTac.view_params2.yz;
     int theater = int(floor(uTac.view_params2.w + 0.5));
 
-    // Ground plane (z = 0) intersection in local 30x20 grid space & global map cell space
-    // In Live Gameplay Mode (!isShowcase), use exact 1:1 linear tacUV so unit selection & terrain panning are 100% locked!
+    vec4 camParams = uTac.light_pos_rad[31]; // (camYaw, camPitch, camZoom, camMode)
+    vec4 fpParams  = uTac.light_col_int[31]; // (fpEyeX, fpEyeY, fpEyeZ, fpEntIdx + fpWeaponKind * 0.1)
+    float camYaw   = camParams.x;
+    bool isFirstPerson = (camParams.w > 0.5);
+    float camPitch = isFirstPerson ? clamp(camParams.y, -0.55, 0.65)
+                                   : ((camParams.z > 0.05) ? clamp(camParams.y, 0.14, 1.52) : 0.98);
+    float camZoom  = (camParams.z > 0.05) ? clamp(camParams.z, 0.25, 2.25) : 1.0;
+    bool isCam3D   = isFirstPerson || (abs(camZoom - 1.0) > 0.005) || (abs(camYaw) > 0.005) || (abs(camPitch - 0.98) > 0.015);
+    int fpEntIdx   = isFirstPerson ? int(floor(fpParams.w + 0.01)) : -1;
+    int fpWeaponKind = isFirstPerson ? int(floor(fract(fpParams.w) * 10.0 + 0.5)) : 0;
+
     bool isShowcase = (uTac.hud_telemetry[0].x == 3200.0 && uTac.hud_telemetry[0].y == 2100.0);
     vec2 perspUV = isShowcase ? vec2(
         0.5 + (tacUV.x - 0.5) * mix(1.18, 0.92, vUV.y),
         pow(clamp(vUV.y, 0.0005, 1.0), 0.86)
     ) : tacUV;
+
     vec2 groundCellXY = subCell + perspUV * cellsSpan;
+    vec3 V = normalize(vec3(-0.20, 0.78, 0.59));
+    float orbitalHorizonMix = 0.0;
+
+    if (isCam3D && !isFirstPerson) {
+        // 3D Orbital Camera: Zoom + Vertical Arc Pitch Perspective Foreshortening + 360-Degree Yaw Spin
+        float du = tacUV.x - 0.5;
+        float dv = tacUV.y - 0.5;
+        float tiltFactor = clamp((0.98 - camPitch) * 0.72, -0.32, 0.58);
+        float denom = max(0.22, 1.0 + dv * tiltFactor);
+        float perspX = (du * camZoom) / denom;
+        float pitchScaleY = 1.0 / clamp(sin(camPitch) / 0.8305, 0.34, 1.25);
+        float perspY = ((dv * camZoom) / denom) * pitchScaleY;
+        vec2 worldSpan = vec2(perspX, perspY) * cellsSpan;
+        float cYaw = cos(camYaw);
+        float sYaw = sin(camYaw);
+        vec2 rotSpan = vec2(worldSpan.x * cYaw - worldSpan.y * sYaw, worldSpan.x * sYaw + worldSpan.y * cYaw);
+        groundCellXY = subCell + vec2(0.5) * cellsSpan + rotSpan;
+
+        // Rotate & tilt 3D camera ray vector V along the orbital arc
+        vec2 baseHoriz = normalize(vec2(-0.20, 0.78));
+        vec2 rotHoriz = vec2(baseHoriz.x * cYaw - baseHoriz.y * sYaw, baseHoriz.x * sYaw + baseHoriz.y * cYaw);
+        float elev = clamp(camPitch * 0.65, 0.22, 1.38);
+        V = normalize(vec3(rotHoriz * cos(elev), sin(elev)));
+
+        // When tilted to low ground-grazing angles, blend far upper horizon into the 3D sky dome
+        if (camPitch < 0.48) {
+            float horizonStart = clamp((0.48 - camPitch) * 0.75, 0.0, 0.28);
+            orbitalHorizonMix = smoothstep(horizonStart, max(0.001, horizonStart - 0.14), tacUV.y);
+        }
+    }
+
     vec2 globalCellXY = originCell + groundCellXY;
 
-    // True 3/4 Perspective Camera & Sun Directions (in cell coordinate space: +X East, +Y South, +Z Up)
-    // Camera looks from South-West to North-East at a ~36 deg tactical angle so 3D towers, cliffs & tank sides pop
-    vec3 V = normalize(vec3(-0.20, 0.78, 0.59));
+    // First-Person Ground-Level Pinhole Camera Ray Construction & 3D Terrain Ray-March
+    vec3 fpEye = vec3(0.0);
+    vec3 fpRayDir = vec3(0.0, -1.0, 0.0);
+    bool fpHitGround = true;
+    float fpGroundT = 22.0;
+
+    if (isFirstPerson) {
+        vec4 fpTerrFields;
+        float fpBaseGroundZ = evaluateTerrainHeight(fpParams.xy, originCell + fpParams.xy, fpTerrFields);
+        fpEye = vec3(fpParams.xy, max(fpBaseGroundZ, 0.0) + max(fpParams.z, 0.22));
+        vec3 fpFwd   = normalize(vec3(sin(camYaw) * cos(camPitch), -cos(camYaw) * cos(camPitch), sin(camPitch)));
+        vec3 fpRight = vec3(cos(camYaw), sin(camYaw), 0.0);
+        vec3 fpUp    = cross(fpFwd, fpRight);
+        float fovScale = clamp(camZoom, 0.45, 1.45);
+        vec2 ndc = vec2((tacUV.x - 0.5) * 1.55, (0.5 - tacUV.y) * 1.05) * fovScale;
+        fpRayDir = normalize(fpFwd + fpRight * ndc.x + fpUp * ndc.y);
+        V = -fpRayDir;
+
+        fpHitGround = false;
+        float t = 0.18;
+        for (int s = 0; s < 48; ++s) {
+            vec3 p = fpEye + fpRayDir * t;
+            if (p.z > 2.65 && fpRayDir.z > 0.0) break;
+            vec4 tf;
+            float gridFade = smoothstep(0.0, 2.5, min(min(p.x, 29.0 - p.x), min(p.y, 19.0 - p.y)));
+            float h = evaluateTerrainHeight(p.xy, originCell + p.xy, tf) * gridFade;
+            float diff = p.z - h;
+            if (diff < 0.008) {
+                float tLo = max(0.18, t - max(0.05, t * 0.06));
+                float tHi = t;
+                for (int b = 0; b < 4; ++b) {
+                    float tMid = 0.5 * (tLo + tHi);
+                    vec3 pMid = fpEye + fpRayDir * tMid;
+                    float hMid = evaluateTerrainHeight(pMid.xy, originCell + pMid.xy, tf);
+                    if (pMid.z < hMid) tHi = tMid; else tLo = tMid;
+                }
+                fpGroundT = 0.5 * (tLo + tHi);
+                fpHitGround = true;
+                break;
+            }
+            t += max(diff * 0.55, 0.05 + t * 0.032);
+            if (t > 22.0) break;
+        }
+        groundCellXY = fpEye.xy + fpRayDir.xy * (fpHitGround ? fpGroundT : 16.0);
+        globalCellXY = originCell + groundCellXY;
+    }
+
     vec3 L = normalize(vec3(-0.58, -0.42, 0.69)); // Warm directional sun from NW
     vec3 H = normalize(V + L);
 
@@ -1745,14 +1832,15 @@ void main() {
     // 3. Ray-March 3D Terrain Relief (Heightfield Displacement + Cliffs + Craters)
     // ------------------------------------------------------------------------
     vec4 terrainFields;
-    vec2 camStepXY = V.xy / max(V.z, 0.42);
+    vec2 camStepXY = V.xy / max(V.z, 0.36);
     float hGround = evaluateTerrainHeight(groundCellXY, globalCellXY, terrainFields);
     vec2 displacedCellXY = groundCellXY;
     vec2 displacedGlobalXY = globalCellXY;
-    if (isShowcase) {
-        // 5-step iterative terrain relief refinement along 3/4 perspective camera ray for showcase coastal mountains
+    if (!isFirstPerson && (isShowcase || isCam3D)) {
+        // 5-step iterative terrain relief refinement along 3D perspective camera ray
+        float reliefScale = isShowcase ? 0.92 : clamp((1.22 - camPitch) * 0.95, 0.15, 0.95);
         for (int rStep = 0; rStep < 5; ++rStep) {
-            displacedCellXY = groundCellXY + camStepXY * (hGround * 0.92);
+            displacedCellXY = groundCellXY + camStepXY * (hGround * reliefScale);
             displacedGlobalXY = originCell + displacedCellXY;
             hGround = mix(hGround, evaluateTerrainHeight(displacedCellXY, displacedGlobalXY, terrainFields), 0.72);
         }
@@ -1977,11 +2065,10 @@ void main() {
     }
 
     // ------------------------------------------------------------------------
-    // 6. Top-Down Oblique Camera Ray-March of 3D Cell Structures (Tiberium, Walls, Crates)
-    //    & 3D Articulated Entities (Vehicles, Buildings, Infantry, Aircraft, Trees)
-    //    Rays march FROM THE CAMERA (u = uMax, above the scene) DOWNWARD (-V) toward u = 0 (ground)
+    // 6. Top-Down / 3D Orbital / First-Person Camera Ray-March of 3D Cell Structures
+    //    (Tiberium, Walls, Crates) & 3D Articulated Entities (Vehicles, Buildings, Infantry, Aircraft, Trees)
     // ------------------------------------------------------------------------
-    vec3 camDir = normalize(vec3(-0.20, 0.78, 0.59)); // True 36-deg 3/4 perspective camera ray (+Y South, -X West, +Z Up)
+    vec3 camDir = isFirstPerson ? normalize(vec3(-0.20, 0.78, 0.59)) : V;
     int hitMat = 0;
     vec3 hitPos = terrainPos;
     vec3 hitNormal = terrainN;
@@ -1991,42 +2078,84 @@ void main() {
     int hitFlags = 0;
     float hitHealth = 1.0;
     float bestCamU = 0.0;
+    float fpBestT = fpGroundT;
 
-    // A. Check 3D Tiberium Crystal Clusters, Connected Walls & Supply Crates in current/southern cell
+    // A. Check 3D Tiberium Crystal Clusters, Connected Walls & Supply Crates in nearby cells
     ivec2 groundCellIdx = ivec2(floor(groundCellXY));
-    for (int cy = 0; cy <= 1; ++cy) {
-        for (int cx = -1; cx <= 0; ++cx) {
-            if (uTac.hud_telemetry[0].x == 3200.0 || roadMask > 0.10) continue;
-            ivec2 testCell = groundCellIdx + ivec2(cx, cy);
-            uint rawC = fetchCellRaw(testCell);
+    if (!isFirstPerson) {
+        for (int cy = -1; cy <= 1; ++cy) {
+            for (int cx = -1; cx <= 1; ++cx) {
+                if (!isCam3D && (cy < 0 || cx > 0)) continue;
+                if (uTac.hud_telemetry[0].x == 3200.0 || roadMask > 0.10) continue;
+                ivec2 testCell = groundCellIdx + ivec2(cx, cy);
+                uint rawC = fetchCellRaw(testCell);
+                uint ovlC = (rawC >> 4u) & 15u;
+                uint landC = rawC & 15u;
+                if (ovlC == 0u && landC != 4u && landC != 5u) continue;
+
+                float u = 0.55;
+                for (int s = 0; s < 16; ++s) {
+                    if (u <= bestCamU) break;
+                    vec3 p = vec3(groundCellXY + camDir.xy * u, camDir.z * u);
+                    int mId;
+                    vec3 lCoord;
+                    float d = mapCellStructures(p, testCell, rawC, mId, lCoord);
+                    if (d < 0.006) {
+                        bestCamU = u;
+                        hitMat = mId;
+                        hitPos = terrainPos + camDir * u;
+                        hitLocal = lCoord;
+                        float eps = 0.006;
+                        int dm;
+                        vec3 dl;
+                        hitNormal = normalize(vec3(
+                            mapCellStructures(p + vec3(eps, 0.0, 0.0), testCell, rawC, dm, dl) - d,
+                            mapCellStructures(p + vec3(0.0, eps, 0.0), testCell, rawC, dm, dl) - d,
+                            mapCellStructures(p + vec3(0.0, 0.0, eps), testCell, rawC, dm, dl) - d
+                        ));
+                        break;
+                    }
+                    u -= max(d * 0.85, 0.006);
+                }
+            }
+        }
+    } else if (uTac.hud_telemetry[0].x != 3200.0) {
+        // First-Person 3D ray-march of Walls, Tiberium & Supply Crates along fpRayDir
+        float tW = 0.35;
+        for (int s = 0; s < 28; ++s) {
+            if (tW >= min(fpBestT, 12.0)) break;
+            vec3 pWorld = fpEye + fpRayDir * tW;
+            if (pWorld.z > 0.65 && fpRayDir.z > 0.0) break;
+            ivec2 cIdx = ivec2(floor(pWorld.xy));
+            uint rawC = fetchCellRaw(cIdx);
             uint ovlC = (rawC >> 4u) & 15u;
             uint landC = rawC & 15u;
-            if (ovlC == 0u && landC != 4u && landC != 5u) continue;
-
-            float u = 0.55;
-            for (int s = 0; s < 16; ++s) {
-                if (u <= bestCamU) break;
-                vec3 p = vec3(groundCellXY + camDir.xy * u, camDir.z * u);
-                int mId;
-                vec3 lCoord;
-                float d = mapCellStructures(p, testCell, rawC, mId, lCoord);
-                if (d < 0.006) {
-                    bestCamU = u;
-                    hitMat = mId;
-                    hitPos = terrainPos + camDir * u;
-                    hitLocal = lCoord;
-                    float eps = 0.006;
-                    int dm;
-                    vec3 dl;
-                    hitNormal = normalize(vec3(
-                        mapCellStructures(p + vec3(eps, 0.0, 0.0), testCell, rawC, dm, dl) - d,
-                        mapCellStructures(p + vec3(0.0, eps, 0.0), testCell, rawC, dm, dl) - d,
-                        mapCellStructures(p + vec3(0.0, 0.0, eps), testCell, rawC, dm, dl) - d
-                    ));
-                    break;
-                }
-                u -= max(d * 0.85, 0.006);
+            if (ovlC == 0u && landC != 4u && landC != 5u) {
+                tW += 0.35;
+                continue;
             }
+            vec4 cTf;
+            float cGroundZ = evaluateTerrainHeight(pWorld.xy, originCell + pWorld.xy, cTf);
+            vec3 pCell = vec3(pWorld.xy, pWorld.z - cGroundZ);
+            int mId;
+            vec3 lCoord;
+            float d = mapCellStructures(pCell, cIdx, rawC, mId, lCoord);
+            if (d < 0.007) {
+                fpBestT = tW;
+                hitMat = mId;
+                hitPos = pWorld;
+                hitLocal = lCoord;
+                float eps = 0.006;
+                int dm;
+                vec3 dl;
+                hitNormal = normalize(vec3(
+                    mapCellStructures(pCell + vec3(eps, 0.0, 0.0), cIdx, rawC, dm, dl) - d,
+                    mapCellStructures(pCell + vec3(0.0, eps, 0.0), cIdx, rawC, dm, dl) - d,
+                    mapCellStructures(pCell + vec3(0.0, 0.0, eps), cIdx, rawC, dm, dl) - d
+                ));
+                break;
+            }
+            tW += max(d * 0.80, 0.02);
         }
     }
 
@@ -2040,6 +2169,7 @@ void main() {
 
     for (int i = 0; i < 128; ++i) {
         if (i >= entCount) break;
+        if (isFirstPerson && i == fpEntIdx) continue;
         vec4 d0 = uTac.ent_data0[i];
         vec4 d1 = uTac.ent_data1[i];
 
@@ -2062,6 +2192,92 @@ void main() {
             cullRad = 6.20;
         } else if (cat == 4) {
             cullRad = 1.45;
+        }
+
+        if (isFirstPerson) {
+            // First-Person 3D Pinhole Ray-Marching against 3D Entities, Projectiles & Volumetric Smoke/Fire
+            float rayHorizLen = max(length(fpRayDir.xy), 0.12);
+            vec2 rayHorizDir = fpRayDir.xy / rayHorizLen;
+            float distAlong2D = dot(d0.xy - fpEye.xy, rayHorizDir);
+            float tEnt = distAlong2D / rayHorizLen;
+            if (tEnt < 0.14 || tEnt > 21.0) continue;
+            vec3 pAtEnt = fpEye + fpRayDir * tEnt;
+            float perp2D = length(pAtEnt.xy - d0.xy);
+            if (perp2D > cullRad) continue;
+
+            vec4 entTf;
+            float entGroundZ = evaluateTerrainHeight(d0.xy, originCell + d0.xy, entTf);
+            if (entTf.x > 0.35) entGroundZ = max(entGroundZ, 0.0);
+
+            if (cat == 6 && tEnt < fpBestT + 1.2) {
+                float rad = clamp(d1.w, 0.18, 1.15);
+                float stage = clamp(d1.x, 0.0, 1.0);
+                float relZ = pAtEnt.z - entGroundZ;
+                if (relZ >= -0.05 && relZ < 3.6) {
+                    float fDist3D = length(vec3((pAtEnt.xy - d0.xy) / (rad * 1.35), (relZ - 0.25) / (rad * 1.45)));
+                    if (fDist3D < 1.35) {
+                        float nF = fbm3(pAtEnt.xy * 4.5 - vec2(0.0, time * 3.4 + relZ * 3.0));
+                        float fMask = smoothstep(1.25, 0.15, fDist3D - (nF - 0.5) * 0.55) * (1.0 - stage * 0.65);
+                        vec3 fCol = mix(vec3(0.96, 0.22, 0.02), vec3(1.0, 0.86, 0.38), fMask);
+                        vfxAdditive += fCol * fMask * 1.85;
+                    }
+                    // Rising 3D black pyroclastic smoke plume in first-person sky
+                    float plumeW = rad * mix(0.65, 1.85, clamp(relZ / 3.2, 0.0, 1.0));
+                    float smkDist = length(pAtEnt.xy - d0.xy + vec2(relZ * 0.22, 0.0));
+                    if (relZ > 0.15 && smkDist < plumeW) {
+                        float sn = fbm4(vec2(perp2D * 2.5, relZ * 1.8 - time * 0.55));
+                        float smkA = smoothstep(plumeW, plumeW * 0.2, smkDist - (sn - 0.5) * 0.45) * smoothstep(3.5, 0.4, relZ);
+                        if (smkA * 0.88 > vfxSmokeAlpha) {
+                            vfxSmokeColor = mix(vec3(0.02, 0.025, 0.03), vec3(0.16, 0.18, 0.20), clamp(sn, 0.0, 1.0));
+                            vfxSmokeAlpha = smkA * 0.88;
+                        }
+                    }
+                }
+                continue;
+            }
+            if (cat == 5 && tEnt < fpBestT) {
+                float pZ = entGroundZ + max(d0.z, 0.18);
+                float d3 = length(pAtEnt - vec3(d0.xy, pZ));
+                if (d3 < 0.22) {
+                    vfxAdditive += vec3(1.0, 0.82, 0.32) * exp(-d3 * 24.0) * 2.2;
+                }
+                continue;
+            }
+            if (cat <= 4 && tEnt - cullRad < fpBestT) {
+                float tStart = max(0.16, tEnt - cullRad * 0.90);
+                float tEnd   = min(fpBestT, tEnt + cullRad * 0.90);
+                float tCur   = tStart;
+                for (int s = 0; s < 32; ++s) {
+                    if (tCur >= tEnd) break;
+                    vec3 pWorld = fpEye + fpRayDir * tCur;
+                    float infScale = (cat == 2) ? 1.65 : 1.0;
+                    vec3 pSDF   = vec3(d0.xy + (pWorld.xy - d0.xy) * infScale, (pWorld.z - entGroundZ) * infScale);
+                    int pMat;
+                    vec3 pLoc;
+                    float d = evaluateSingleEntitySDF(pSDF, d0, d1, time, pMat, pLoc) / infScale;
+                    if (d < 0.0065) {
+                        fpBestT   = tCur;
+                        hitMat    = pMat;
+                        hitPos    = pWorld;
+                        hitLocal  = pLoc;
+                        hitHouse  = houseId;
+                        hitSubType = subType;
+                        hitFlags  = flags;
+                        hitHealth = health;
+                        float eps = 0.006;
+                        int dm;
+                        vec3 dl;
+                        hitNormal = normalize(vec3(
+                            evaluateSingleEntitySDF(pSDF + vec3(eps, 0.0, 0.0), d0, d1, time, dm, dl) - d,
+                            evaluateSingleEntitySDF(pSDF + vec3(0.0, eps, 0.0), d0, d1, time, dm, dl) - d,
+                            evaluateSingleEntitySDF(pSDF + vec3(0.0, 0.0, eps), d0, d1, time, dm, dl) - d
+                        ));
+                        break;
+                    }
+                    tCur += max(d * 0.78, 0.006);
+                }
+            }
+            continue;
         }
 
         // Fast 2D bounding-box rejection (shifted along 3/4 perspective camera vector for tall 3D projection)
@@ -2435,6 +2651,7 @@ void main() {
     if (hitMat > 0) {
         N = hitNormal;
         P = hitPos;
+        emissive = vec3(0.0);
         entityShadow = 0.0; // Top of 3D object isn't shadowed by its own ground footprint
 
         vec3 houseCol = getHouseTrimColor(hitHouse);
@@ -2589,10 +2806,10 @@ void main() {
     vec3 directLight = (kD * albedo / PI + F * D * 0.25) * sunColor * NdotL * shadowVis;
     vec3 ambientLight = albedo * skyAmb * (0.55 + 0.45 * N.z);
 
-    // Evaluate up to 32 Dynamic 3D Point Lights (Explosions, Muzzle Flashes, Lasers, Tiberium Glow)
-    int lightCount = clamp(int(uTac.view_params3.y), 0, 32);
+    // Evaluate up to 31 Dynamic 3D Point Lights (Slot 31 is reserved for 3D Camera & First-Person State)
+    int lightCount = clamp(int(uTac.view_params3.y), 0, 31);
     vec3 dynamicLight = vec3(0.0);
-    for (int li = 0; li < 32; ++li) {
+    for (int li = 0; li < 31; ++li) {
         if (li >= lightCount) break;
         vec4 lPosRad = uTac.light_pos_rad[li];
         vec4 lColInt = uTac.light_col_int[li];
@@ -2617,15 +2834,58 @@ void main() {
 
     vec3 litColor = ambientLight + directLight + dynamicLight + emissive;
 
-    // Photorealistic coastal atmospheric perspective & overcast horizon mist across upper screen (CnC-Ultra-Game.jpg)
-    // Applied BEFORE foreground volumetric smoke & fire so the black smoke column rises vividly in front of the distant mist!
-    float mistNoise = fbm3(globalCellXY * 0.72 + vec2(time * 0.08, -time * 0.04));
-    float distFog = smoothstep(0.38, 0.0, vUV.y) * (0.24 + 0.44 * smoothstep(0.20, 0.0, vUV.y) + 0.14 * mistNoise);
-    // Keep tall 3D communication towers & mountain ridges silhouetted clearly through the mist
-    if ((hitMat > 0 && P.z > 0.32) || hGround > 0.28) {
-        distFog *= 0.55;
+    // 3D Volumetric Overcast Coastal Sky Dome, Cumulus Clouds & Distant Mountain Silhouettes
+    // Used in First-Person Mode (sky rays + distance fog) and Low-Angle 3D Orbital Tilt Mode
+    if (isFirstPerson || orbitalHorizonMix > 0.001) {
+        vec3 skyRay = isFirstPerson ? fpRayDir : normalize(vec3(sin(camYaw + (tacUV.x - 0.5) * 1.1), -cos(camYaw + (tacUV.x - 0.5) * 1.1), clamp((0.28 - tacUV.y) * 1.6, -0.1, 0.85)));
+        float skyAz   = atan(skyRay.x, -skyRay.y);
+        float skyElev = clamp(skyRay.z, -0.15, 1.0);
+        vec3 zenithCol  = (theater == 0) ? vec3(0.24, 0.38, 0.56) : vec3(0.16, 0.24, 0.34);
+        vec3 horizonCol = (theater == 0) ? vec3(0.68, 0.58, 0.46) : vec3(0.48, 0.53, 0.58);
+        vec3 skyDome = mix(horizonCol, zenithCol, pow(clamp(skyElev * 1.6, 0.0, 1.0), 0.65));
+
+        // Volumetric drifting coastal storm / cumulus clouds
+        vec2 cloudUV = skyRay.xy / max(skyRay.z + 0.28, 0.12) * 1.6 + vec2(time * 0.018, -time * 0.012);
+        float cNoise1 = fbm4(cloudUV * 1.8);
+        float cNoise2 = fbm3(cloudUV * 4.2 + vec2(3.1, 1.7));
+        float cloudMask = smoothstep(0.38, 0.76, cNoise1 * 0.68 + cNoise2 * 0.32) * smoothstep(-0.02, 0.14, skyElev);
+        vec3 cloudLit = mix(vec3(0.28, 0.32, 0.37), vec3(0.76, 0.80, 0.84), smoothstep(0.35, 0.78, cNoise2));
+        skyDome = mix(skyDome, cloudLit, cloudMask * 0.82);
+
+        // Directional sun Mie scattering glow in sky
+        float sunDot = clamp(dot(skyRay, L), 0.0, 1.0);
+        skyDome += sunColor * (pow(sunDot, 12.0) * 0.32 + pow(sunDot, 64.0) * 0.55);
+
+        // Distant jagged coastal mountain range silhouette along the horizon
+        float mtnHeight = (fbm4(vec2(skyAz * 2.8 + 1.4, 2.3)) * 0.11 + fbm3(vec2(skyAz * 7.5, 5.1)) * 0.04) * 0.85;
+        if (skyElev < mtnHeight && skyElev > -0.06) {
+            float mtnShade = fbm3(vec2(skyAz * 14.0, skyElev * 28.0));
+            vec3 mtnCol = mix(vec3(0.18, 0.21, 0.25), horizonCol * 0.88, clamp((mtnHeight - skyElev) * 6.0, 0.2, 0.85) + (mtnShade - 0.5) * 0.15);
+            skyDome = mix(mtnCol, horizonCol, 0.45);
+        }
+
+        if (isFirstPerson) {
+            if (!fpHitGround && hitMat == 0) {
+                litColor = skyDome;
+            } else {
+                float hitDist = (hitMat > 0) ? fpBestT : fpGroundT;
+                float fpFog = smoothstep(4.5, 21.5, hitDist);
+                litColor = mix(litColor, skyDome, clamp(fpFog * 0.86, 0.0, 0.92));
+            }
+        } else {
+            litColor = mix(litColor, skyDome, orbitalHorizonMix);
+        }
+    } else {
+        // Photorealistic coastal atmospheric perspective & overcast horizon mist across upper screen (CnC-Ultra-Game.jpg)
+        // Applied BEFORE foreground volumetric smoke & fire so the black smoke column rises vividly in front of the distant mist!
+        float mistNoise = fbm3(globalCellXY * 0.72 + vec2(time * 0.08, -time * 0.04));
+        float distFog = smoothstep(0.38, 0.0, vUV.y) * (0.24 + 0.44 * smoothstep(0.20, 0.0, vUV.y) + 0.14 * mistNoise);
+        // Keep tall 3D communication towers & mountain ridges silhouetted clearly through the mist
+        if ((hitMat > 0 && P.z > 0.32) || hGround > 0.28) {
+            distFog *= 0.55;
+        }
+        litColor = mix(litColor, vec3(0.50, 0.54, 0.58), clamp(distFog, 0.0, 0.84));
     }
-    litColor = mix(litColor, vec3(0.50, 0.54, 0.58), clamp(distFog, 0.0, 0.84));
 
     // Composite roaring structure fire & overhanging 3D volumetric cauliflower smoke column in front of background mist!
     litColor += vfxAdditive * (1.0 - vfxSmokeAlpha * 0.58);
@@ -2634,9 +2894,59 @@ void main() {
     }
 
     // ------------------------------------------------------------------------
+    // 8b. First-Person 3D Foreground Weapon / Tank Cannon Barrel & Gunner Optic HUD
+    // ------------------------------------------------------------------------
+    if (isFirstPerson) {
+        // 1. 3D Foreground Main Battle Tank Cannon Barrel / Weapon extending from lower viewport into 3D space
+        vec2 wUV = tacUV - vec2(0.5, 1.0); // Origin at bottom-center of viewport
+        if (fpWeaponKind <= 1) {
+            // 120mm Smoothbore Tank Cannon Barrel + Bore Evacuator + Mantlet Hood in lower-center/right
+            vec2 bPos = vec2(wUV.x - 0.06 + wUV.y * 0.10, wUV.y); // Slight perspective convergence toward crosshair
+            float barrelLen = -0.36; // Extends 36% up the screen toward the center reticle
+            if (bPos.y > barrelLen && bPos.y <= 0.0) {
+                float tB = clamp(-bPos.y / 0.36, 0.0, 1.0); // 0 at bottom mantlet, 1 at muzzle tip
+                float halfW = mix(0.052, 0.016, pow(tB, 0.72));
+                // Bore evacuator (fume extractor) bulge mid-barrel
+                if (tB > 0.42 && tB < 0.68) {
+                    halfW *= 1.32;
+                } else if (tB > 0.90) {
+                    halfW *= 1.18; // Muzzle reference sensor collar
+                }
+                if (abs(bPos.x) < halfW) {
+                    float cylX = bPos.x / max(halfW, 1e-4);
+                    float cylZ = sqrt(max(0.05, 1.0 - cylX * cylX));
+                    vec3 bNorm = normalize(vec3(cylX * 0.85, -0.25, cylZ));
+                    float bDiff = max(dot(bNorm, L), 0.15);
+                    float bSpec = pow(max(dot(bNorm, normalize(L + vec3(0.0, 0.0, 1.0))), 0.0), 28.0);
+                    float flute = 0.90 + 0.10 * sin(tB * 65.0);
+                    vec3 gunCol = mix(vec3(0.24, 0.22, 0.17), vec3(0.14, 0.15, 0.16), step(0.42, tB) * step(tB, 0.68));
+                    vec3 shadedGun = gunCol * flute * (0.32 + 0.78 * bDiff) + vec3(0.85, 0.82, 0.74) * bSpec * 0.45;
+                    litColor = shadedGun;
+                }
+            }
+            // Armored Commander Cupola / Turret Glacis Deck along bottom edge
+            float deckH = -0.055 + 0.025 * cos((tacUV.x - 0.5) * 5.0);
+            if (wUV.y > deckH) {
+                float edgeBevel = smoothstep(deckH, deckH + 0.012, wUV.y);
+                litColor = mix(vec3(0.32, 0.30, 0.24), vec3(0.11, 0.12, 0.13), edgeBevel);
+            }
+        } else if (fpWeaponKind == 2) {
+            // Infantry First-Person Assault Rifle in lower-right hand position
+            vec2 rPos = tacUV - vec2(0.68, 1.0);
+            float rAlong = -rPos.y;
+            float rAcross = rPos.x + rAlong * 0.42;
+            if (rAlong > 0.0 && rAlong < 0.34 && abs(rAcross) < mix(0.048, 0.014, rAlong / 0.34)) {
+                float cylX = rAcross / mix(0.048, 0.014, rAlong / 0.34);
+                vec3 rCol = vec3(0.13, 0.14, 0.15) * (0.55 + 0.45 * sqrt(max(0.0, 1.0 - cylX * cylX)));
+                litColor = rCol;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------
     // 9. 3D Holographic Building Placement Grid & Rubber-Band Selection Box
     // ------------------------------------------------------------------------
-    if (cellCursor != 0u) {
+    if (cellCursor != 0u && !isFirstPerson) {
         vec2 cUV = fract(displacedCellXY);
         vec2 edgeD = min(cUV, 1.0 - cUV);
         float border = smoothstep(0.09, 0.02, min(edgeD.x, edgeD.y));
@@ -2671,7 +2981,7 @@ void main() {
     // 10. Atmospheric Reconnaissance Fog-of-War & ACES Filmic Tone Mapping
     // ------------------------------------------------------------------------
     float vis = terrainFields.w; // 0.0 = Unmapped Reconnaissance Fog, 1.0 = Fully Visible
-    if (vis < 0.99) {
+    if (vis < 0.99 && !isFirstPerson) {
         // Instead of pitch-black void hiding the 3D coastal terrain, render unmapped cells as moody
         // twilight reconnaissance mist so 3D cliffs, roads & crashing surf remain visible across the screen
         float shroudNoise = fbm3(globalCellXY * 1.8 + vec2(time * 0.14, -time * 0.09));
@@ -2690,12 +3000,73 @@ void main() {
     mapped *= (0.55 + 0.45 * sideShadow);
 
     // ------------------------------------------------------------------------
-    // 10b. Sleek Dark-Slate Corner Tactical HUD Cards (CnC-Ultra-Game.jpg)
+    // 10b. Sleek Dark-Slate Corner Tactical HUD Cards & 3D Camera / 1st-Person Optic HUD
     // ------------------------------------------------------------------------
     vec2 px = vUV * vec2(640.0, 400.0);
     vec3 hudBg     = vec3(0.086, 0.098, 0.114);
     vec3 hudSlot   = vec3(0.118, 0.134, 0.154);
     vec3 hudBorder = vec3(0.225, 0.252, 0.282);
+
+    if (isFirstPerson && dlgRect.z <= dlgRect.x) {
+        // Illuminated Military Tank Gunner / Visor Optic Reticle in Viewport Center
+        vec2 vpCenterPx = 0.5 * (tacRect.xy + tacRect.zw) * vec2(640.0, 400.0);
+        vec2 cRel = px - vpCenterPx;
+        float rDist = length(cRel);
+        vec3 opticCol = (hitMat >= 20 && hitHouse == 1) ? vec3(1.0, 0.24, 0.18) : vec3(0.24, 0.96, 0.48);
+
+        // Outer rangefinder ring + stadia mil-dots + center chevron
+        float ringMask = smoothstep(0.95, 0.2, abs(rDist - 46.0)) * step(6.0, min(abs(cRel.x), abs(cRel.y)));
+        float crossH   = smoothstep(0.75, 0.1, abs(cRel.y)) * step(8.0, abs(cRel.x)) * step(abs(cRel.x), 68.0);
+        float crossV   = smoothstep(0.75, 0.1, abs(cRel.x)) * step(8.0, abs(cRel.y)) * step(abs(cRel.y), 52.0);
+        float ticksH   = smoothstep(0.75, 0.1, abs(mod(abs(cRel.x) - 8.0, 12.0))) * step(abs(cRel.y), 3.2) * step(12.0, abs(cRel.x)) * step(abs(cRel.x), 64.0);
+        float chev     = smoothstep(0.85, 0.15, abs(abs(cRel.x) * 0.85 - (cRel.y - 1.5))) * step(cRel.y, 6.5) * step(1.5, cRel.y);
+        float reticleAlpha = clamp((ringMask * 0.55 + (crossH + crossV) * 0.65 + ticksH * 0.75 + chev * 0.95), 0.0, 1.0);
+        mapped = mix(mapped, opticCol, reticleAlpha * 0.82);
+
+        // Top-Center Azimuth Compass Tape & "1ST PERSON VIEW [V EXIT]" Status Pill
+        vec2 pillMin = vec2(vpCenterPx.x - 86.0, 20.0);
+        vec2 pillMax = vec2(vpCenterPx.x + 86.0, 42.0);
+        if (px.x >= pillMin.x && px.x <= pillMax.x && px.y >= pillMin.y && px.y <= pillMax.y) {
+            vec2 dIn = min(px - pillMin, pillMax - px);
+            float edge = min(dIn.x, dIn.y);
+            vec3 pCol = (edge < 1.1) ? opticCol * 0.85 : hudBg * 0.92;
+            float tickX = mod(px.x - vpCenterPx.x + camYaw * 57.2958 * 1.5, 12.0);
+            if (px.y > 35.5 && abs(tickX - 6.0) < 0.7) {
+                pCol = opticCol * 0.75;
+            }
+            // "1ST PERSON VIEW [WASD/V]"
+            int fpHdr[23] = int[23](49,83,84,32,80,69,82,83,79,78,32,86,73,69,87,32,91,87,65,83,68,47,86);
+            vec2 tRel = px - vec2(pillMin.x + 12.0, pillMin.y + 4.5);
+            if (tRel.x >= 0.0 && tRel.y >= 0.0 && tRel.y < 6.0) {
+                int ci = int(floor(tRel.x / 6.4));
+                if (ci >= 0 && ci < 23 && fpHdr[ci] != 32) {
+                    float g = sampleGlyph3x5(fpHdr[ci], vec2(tRel.x - float(ci) * 6.4, tRel.y), 1.15);
+                    pCol = mix(pCol, opticCol, g);
+                }
+            }
+            mapped = mix(mapped, pCol, 0.88);
+        }
+    } else if (isCam3D && dlgRect.z <= dlgRect.x) {
+        // Sleek Top-Center 3D Orbital Camera Telemetry Pill ("3D CAM [V:1ST-PERSON | HOME:RESET]")
+        vec2 vpCenterPx = 0.5 * (tacRect.xy + tacRect.zw) * vec2(640.0, 400.0);
+        vec2 pillMin = vec2(vpCenterPx.x - 74.0, 20.0);
+        vec2 pillMax = vec2(vpCenterPx.x + 74.0, 34.0);
+        if (px.x >= pillMin.x && px.x <= pillMax.x && px.y >= pillMin.y && px.y <= pillMax.y) {
+            vec2 dIn = min(px - pillMin, pillMax - px);
+            float edge = min(dIn.x, dIn.y);
+            vec3 pCol = (edge < 1.1) ? hudBorder * 1.25 : hudBg * 0.90;
+            int camHdr[20] = int[20](51,68,32,79,82,66,73,84,65,76,32,67,65,77,32,91,86,47,72,77);
+            vec2 tRel = px - vec2(pillMin.x + 10.0, pillMin.y + 4.0);
+            if (tRel.x >= 0.0 && tRel.y >= 0.0 && tRel.y < 6.0) {
+                int ci = int(floor(tRel.x / 6.4));
+                if (ci >= 0 && ci < 20 && camHdr[ci] != 32) {
+                    float g = sampleGlyph3x5(camHdr[ci], vec2(tRel.x - float(ci) * 6.4, tRel.y), 1.10);
+                    pCol = mix(pCol, vec3(0.38, 0.94, 0.54), g);
+                }
+            }
+            mapped = mix(mapped, pCol, 0.86);
+        }
+    }
 
     if (dlgRect.z <= dlgRect.x) {
         // ====================================================================
