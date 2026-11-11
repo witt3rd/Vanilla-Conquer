@@ -128,7 +128,7 @@ struct Tactical3DUBOData
     float overlay_rects[4][4];    // [0]=rubber_band, [1]=dialog_rect, [2]=tooltip_rect, [3]=cursor_rect
     float hud_telemetry[2][4];    // [0]=(credits, power, drain, cur_units), [1]=(max_units, tiberium, sel_type, sel_hp)
     uint32_t hud_chars[4][4];     // [0..1]=selected unit name (32 chars), [2..3]=selected unit role subtitle (32 chars)
-    uint32_t cell_grid[150][4];   // 30 x 20 cells = 600 uints
+    uint32_t cell_grid[1024][4];  // Full 64 x 64 world map cells = 4096 uints
     float ent_data0[128][4];      // x=wx, y=wy, z=alt, w=packed_type
     float ent_data1[128][4];      // x=hull_yaw, y=turret_yaw, z=health_and_flags, w=footprint_and_aux
     float light_pos_rad[32][4];   // x=wx, y=wy, z=wz, w=radius

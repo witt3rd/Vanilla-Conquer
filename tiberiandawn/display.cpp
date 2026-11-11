@@ -2739,7 +2739,9 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
 
     if (std::getenv("CNC_AUTO_SCENARIO") != nullptr) {
         static int s_autoFrames = 0;
-        if (s_autoFrames < 150 && Units.Count() > 0) {
+        const char* scrollOffEnv = std::getenv("CNC_SCROLL_OFFSET_Y");
+        int maxSnapFrames = (scrollOffEnv != nullptr || std::getenv("CNC_AUTO_SHOWCASE") != nullptr) ? 150 : 2;
+        if (s_autoFrames < maxSnapFrames && Units.Count() > 0) {
             s_autoFrames++;
             if (std::getenv("CNC_AUTO_SHOWCASE") != nullptr) {
                 Debug_Unshroud = true;
@@ -2758,10 +2760,12 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
                 }
             }
             if (beachUnit) {
+                int scrollOffCellsY = scrollOffEnv ? std::atoi(scrollOffEnv) : 0;
                 int ux = std::max(0, static_cast<int>(Coord_X(beachUnit->Center_Coord())) - 13 * 256);
-                int uy = std::max(0, static_cast<int>(Coord_Y(beachUnit->Center_Coord())) - 11 * 256);
-                TacticalCoord = XY_Coord(ux, uy);
-                DesiredTacticalCoord = TacticalCoord;
+                int uy = std::max(0, static_cast<int>(Coord_Y(beachUnit->Center_Coord())) - (11 - scrollOffCellsY) * 256);
+                ScenarioInit++;
+                Set_Tactical_Position(XY_Coord(ux, uy));
+                ScenarioInit--;
             }
         }
     }
@@ -3033,13 +3037,17 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
         lightCount++;
     };
 
-    // 1. Populate 30 x 20 Cell Grid around (baseCellX, baseCellY)
+    // 1. Populate Full 64 x 64 World Map Cell Grid (100% invariant to TacticalCoord scrolling!)
+    int minPlayableX = (MapCellWidth > 0) ? std::max(0, MapCellX) : 0;
+    int maxPlayableX = (MapCellWidth > 0) ? std::min(MAP_CELL_W - 1, MapCellX + MapCellWidth - 1) : (MAP_CELL_W - 1);
+    int minPlayableY = (MapCellHeight > 0) ? std::max(0, MapCellY) : 0;
     int maxPlayableY = (MapCellHeight > 0) ? std::min(MAP_CELL_H - 1, MapCellY + MapCellHeight - 1) : (MAP_CELL_H - 1);
-    for (int gy = 0; gy < 20; ++gy) {
-        for (int gx = 0; gx < 30; ++gx) {
-            int cx = std::max(0, std::min(MAP_CELL_W - 1, baseCellX + gx));
-            int cy = std::max(0, std::min(maxPlayableY, baseCellY + gy));
-            CELL cell = XY_Cell(cx, cy);
+    for (int cy = 0; cy < 64; ++cy) {
+        int sampleY = std::max(minPlayableY, std::min(maxPlayableY, cy));
+        for (int cx = 0; cx < 64; ++cx) {
+            int sampleX = std::max(minPlayableX, std::min(maxPlayableX, cx));
+            bool isInBounds = (cx == sampleX && cy == sampleY);
+            CELL cell = XY_Cell(sampleX, sampleY);
             const CellClass& c = (*this)[cell];
 
             LandType land = c.Land_Type();
@@ -3050,24 +3058,26 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
 
             uint32_t ovlBits = 0u;
             uint32_t subBits = 0u;
-            if (c.Overlay >= OVERLAY_TIBERIUM1 && c.Overlay <= OVERLAY_TIBERIUM12) {
-                ovlBits = static_cast<uint32_t>(std::max(1, std::min(12, static_cast<int>(c.OverlayData) + 1)));
-            } else if (c.Overlay >= OVERLAY_SANDBAG_WALL && c.Overlay <= OVERLAY_WOOD_WALL) {
-                ovlBits = 13u;
-                subBits = static_cast<uint32_t>(c.Overlay - OVERLAY_SANDBAG_WALL) & 15u;
-            } else if (c.Overlay == OVERLAY_CONCRETE || c.Overlay == OVERLAY_ROAD) {
-                ovlBits = 14u;
-            } else if (c.Overlay == OVERLAY_WOOD_CRATE || c.Overlay == OVERLAY_STEEL_CRATE) {
-                ovlBits = 15u;
-            }
+            if (isInBounds) {
+                if (c.Overlay >= OVERLAY_TIBERIUM1 && c.Overlay <= OVERLAY_TIBERIUM12) {
+                    ovlBits = static_cast<uint32_t>(std::max(1, std::min(12, static_cast<int>(c.OverlayData) + 1)));
+                } else if (c.Overlay >= OVERLAY_SANDBAG_WALL && c.Overlay <= OVERLAY_WOOD_WALL) {
+                    ovlBits = 13u;
+                    subBits = static_cast<uint32_t>(c.Overlay - OVERLAY_SANDBAG_WALL) & 15u;
+                } else if (c.Overlay == OVERLAY_CONCRETE || c.Overlay == OVERLAY_ROAD) {
+                    ovlBits = 14u;
+                } else if (c.Overlay == OVERLAY_WOOD_CRATE || c.Overlay == OVERLAY_STEEL_CRATE) {
+                    ovlBits = 15u;
+                }
 
-            if (ovlBits != 13u && c.Smudge != SMUDGE_NONE) {
-                if (c.Smudge >= SMUDGE_CRATER1 && c.Smudge <= SMUDGE_CRATER6) {
-                    subBits = static_cast<uint32_t>(std::min(5, static_cast<int>(c.Smudge - SMUDGE_CRATER1) + 1));
-                } else if (c.Smudge >= SMUDGE_SCORCH1 && c.Smudge <= SMUDGE_SCORCH6) {
-                    subBits = 6u;
-                } else if (c.Smudge >= SMUDGE_BIB1 && c.Smudge <= SMUDGE_BIB3) {
-                    subBits = 7u;
+                if (ovlBits != 13u && c.Smudge != SMUDGE_NONE) {
+                    if (c.Smudge >= SMUDGE_CRATER1 && c.Smudge <= SMUDGE_CRATER6) {
+                        subBits = static_cast<uint32_t>(std::min(5, static_cast<int>(c.Smudge - SMUDGE_CRATER1) + 1));
+                    } else if (c.Smudge >= SMUDGE_SCORCH1 && c.Smudge <= SMUDGE_SCORCH6) {
+                        subBits = 6u;
+                    } else if (c.Smudge >= SMUDGE_BIB1 && c.Smudge <= SMUDGE_BIB3) {
+                        subBits = 7u;
+                    }
                 }
             }
 
@@ -3085,23 +3095,26 @@ void DisplayClass::Update_Vulkan_Tactical_3D(void)
 
             uint32_t visBits = 2u;
             if (!Debug_Unshroud && PlayerPtr != nullptr) {
-                if (!c.Is_Mapped(PlayerPtr)) {
+                int visX = std::max(minPlayableX + 1, std::min(maxPlayableX - 1, cx));
+                int visY = std::max(minPlayableY + 1, std::min(maxPlayableY - 1, cy));
+                const CellClass& vc = (*this)[XY_Cell(visX, visY)];
+                if (!vc.Is_Mapped(PlayerPtr)) {
                     visBits = 0u;
-                } else if (!c.Is_Visible(PlayerPtr)) {
+                } else if (!vc.Is_Visible(PlayerPtr)) {
                     visBits = 1u;
                 }
             }
 
             uint32_t cursorBits = 0u;
-            if (c.IsCursorHere) {
+            if (isInBounds && c.IsCursorHere) {
                 cursorBits = (ProximityCheck && c.Is_Generally_Clear()) ? 1u : 2u;
             }
 
-            uint32_t seedBits = static_cast<uint32_t>(c.TIcon ^ (cx * 13 + cy * 31)) & 0xFFu;
+            uint32_t seedBits = static_cast<uint32_t>(c.TIcon ^ (sampleX * 13 + sampleY * 31)) & 0xFFu;
             uint32_t packed = landBits | (ovlBits << 4u) | (subBits << 8u) | (slopeBits << 12u) |
                               (visBits << 16u) | (cursorBits << 18u) | (seedBits << 20u);
 
-            int idx = gy * 30 + gx;
+            int idx = cy * 64 + cx;
             ubo.cell_grid[idx >> 2][idx & 3] = packed;
         }
     }

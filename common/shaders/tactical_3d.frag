@@ -18,7 +18,7 @@ layout(set = 0, binding = 4) uniform Tactical3DUBO {
     vec4 overlay_rects[4];    // [0]=rubber_band, [1]=dialog_rect, [2]=tooltip_rect, [3]=aux_ui
     vec4 hud_telemetry[2];    // [0]=(credits, power, drain, cur_units), [1]=(max_units, tiberium, sel_type, sel_hp)
     uvec4 hud_chars[4];       // [0..1]=selected unit name (32 chars), [2..3]=selected unit role (32 chars)
-    uvec4 cell_grid[150];     // 30 x 20 cells = 600 uints
+    uvec4 cell_grid[1024];    // Full 64 x 64 world map cells = 4096 uints
     vec4 ent_data0[128];      // x=wx, y=wy, z=alt, w=packed_type
     vec4 ent_data1[128];      // x=hull_yaw, y=turret_yaw, z=health_and_flags, w=footprint_and_aux
     vec4 light_pos_rad[32];   // x=wx, y=wy, z=wz, w=radius
@@ -78,7 +78,7 @@ float fbm4(vec2 p) {
 }
 
 // ----------------------------------------------------------------------------
-// Cell Grid Unpacking (30 x 20 Grid)
+// Cell Grid Unpacking (Full 64 x 64 World Map Grid)
 // ----------------------------------------------------------------------------
 // Packed uint per cell:
 //   bits 0..3   : LandType (0=Clear, 1=Road, 2=Water, 3=Rock, 4=Wall, 5=Tiberium, 6=Beach, 7=River)
@@ -88,9 +88,9 @@ float fbm4(vec2 p) {
 //   bits 16..17 : Visibility (0=Unmapped Shroud, 1=Mapped Fog edge, 2=Visible)
 //   bits 18..19 : PlacementCursor (0=None, 1=Valid Green, 2=Blocked Red)
 //   bits 20..27 : Icon/Variation seed
-uint fetchCellRaw(ivec2 c) {
-    ivec2 cc = clamp(c, ivec2(0), ivec2(29, 19));
-    int idx = cc.y * 30 + cc.x;
+uint fetchCellRaw(ivec2 worldMapCell) {
+    ivec2 cc = clamp(worldMapCell, ivec2(0), ivec2(63, 63));
+    int idx = cc.y * 64 + cc.x;
     return uTac.cell_grid[idx >> 2][idx & 3];
 }
 
@@ -124,9 +124,9 @@ bool isCellWall(uint raw) {
     return (land == 4u || ovl == 13u);
 }
 
-// Smooth bilinear field evaluators over the 30x20 cell grid
-vec4 sampleTerrainFields(vec2 cellPos) {
-    vec2 p = cellPos - vec2(0.5);
+// Smooth bilinear field evaluators over the 64x64 world map grid (100% world-locked!)
+vec4 sampleTerrainFields(vec2 globalCell) {
+    vec2 p = globalCell - vec2(0.5);
     ivec2 i0 = ivec2(floor(p));
     vec2 f = fract(p);
     vec2 u = f * f * (3.0 - 2.0 * f);
@@ -146,21 +146,21 @@ vec4 sampleTerrainFields(vec2 cellPos) {
 }
 
 // ----------------------------------------------------------------------------
-// 3D Terrain Heightfield (in Cell Units)
+// 3D Terrain Heightfield (in Cell Units) — Pure Function of World globalCell!
 // ----------------------------------------------------------------------------
-float evaluateTerrainHeight(vec2 worldCell, vec2 globalCell, out vec4 fieldsOut) {
-    bool isShowcase = (uTac.hud_telemetry[0].x == 3200.0 && uTac.hud_telemetry[0].y == 2100.0);
+float evaluateTerrainHeight(vec2 globalCell, out vec4 fieldsOut) {
+    bool isShowcase = (uTac.hud_telemetry[0].x == 3200.0 && uTac.hud_telemetry[0].y == 2100.0 && uTac.hud_telemetry[0].w == 78.0);
 
     // Domain-warp coastal sampling using world-locked globalCell so terrain NEVER moves or warps when panning!
     vec2 qWarp = vec2(fbm3(globalCell * 0.36 + vec2(1.7, 9.2)), fbm3(globalCell * 0.36 + vec2(8.3, 2.8)));
-    vec4 fExact = sampleTerrainFields(worldCell);
+    vec4 fExact = sampleTerrainFields(globalCell);
     vec2 coastWarp = (qWarp - 0.5) * (isShowcase ? vec2(1.65, 1.95) : vec2(0.85, 0.85));
-    vec4 fNear = sampleTerrainFields(worldCell + coastWarp * 0.65);
+    vec4 fNear = sampleTerrainFields(globalCell + coastWarp * 0.65);
     vec4 fBroad = 0.25 * (
-        sampleTerrainFields(worldCell + coastWarp + vec2(-0.85, -0.75)) +
-        sampleTerrainFields(worldCell + coastWarp + vec2( 0.85, -0.75)) +
-        sampleTerrainFields(worldCell + coastWarp + vec2(-0.85,  0.75)) +
-        sampleTerrainFields(worldCell + coastWarp + vec2( 0.85,  0.75))
+        sampleTerrainFields(globalCell + coastWarp + vec2(-0.85, -0.75)) +
+        sampleTerrainFields(globalCell + coastWarp + vec2( 0.85, -0.75)) +
+        sampleTerrainFields(globalCell + coastWarp + vec2(-0.85,  0.75)) +
+        sampleTerrainFields(globalCell + coastWarp + vec2( 0.85,  0.75))
     );
     fieldsOut = mix(fNear, fBroad, 0.55);
 
@@ -170,7 +170,7 @@ float evaluateTerrainHeight(vec2 worldCell, vec2 globalCell, out vec4 fieldsOut)
     float mtnEnvelope = 0.0;
 
     if (isShowcase) {
-        vec2 penCell = worldCell;
+        vec2 penCell = globalCell - vec2(38.0, 46.0);
         float eastCoastX = 12.8 + penCell.y * 0.28 + sin(penCell.y * 0.58 + 0.5) * 0.95 + (qWarp.x - 0.5) * 1.65;
         float southCoastY = 13.0 + (penCell.x - 12.5) * 0.20 + sin(penCell.x * 0.65) * 0.75 + (qWarp.y - 0.5) * 1.35;
         float coveDist = length((penCell - vec2(13.8, 13.8)) * vec2(0.45, 0.42));
@@ -202,8 +202,7 @@ float evaluateTerrainHeight(vec2 worldCell, vec2 globalCell, out vec4 fieldsOut)
         float southCrag = smoothstep(11.6, 2.0, penCell.x) * smoothstep(11.0, 14.8, penCell.y);
         mtnEnvelope = clamp(leftMtn * 0.92 + northMtn * 0.85 + eastCliff * 0.82 + southCrag * 0.72, 0.0, 1.0) * (1.0 - valleyFlat * 0.82);
     } else {
-        // Live Gameplay Mode: 100% world-locked to the actual Tiberian Dawn map cells!
-        // Smooth domain-warped shoreline (fNear/fBroad + qWarp) eliminates blocky tile steps while keeping dry land 100% dry!
+        // Live Gameplay Mode: 100% world-locked to the actual Tiberian Dawn 64x64 map cells!
         float wSmooth = mix(fNear.x, fBroad.x, 0.58);
         waterField  = smoothstep(0.24, 0.68, wSmooth + (qWarp.x - 0.5) * 0.18) * smoothstep(0.02, 0.42, max(fExact.x, fBroad.x * 0.85));
         roadField   = smoothstep(0.28, 0.68, mix(fExact.y, fNear.y, 0.45)) * (1.0 - waterField);
@@ -213,7 +212,7 @@ float evaluateTerrainHeight(vec2 worldCell, vec2 globalCell, out vec4 fieldsOut)
     }
 
     // Check cell flags for bridge / craters only
-    ivec2 ci = ivec2(floor(worldCell));
+    ivec2 ci = ivec2(floor(globalCell));
     uint raw = fetchCellRaw(ci);
     uint ovl = (raw >> 4u) & 15u;
     uint sub = (raw >> 8u) & 15u;
@@ -254,7 +253,7 @@ float evaluateTerrainHeight(vec2 worldCell, vec2 globalCell, out vec4 fieldsOut)
 
     float craterH = 0.0;
     if (ovl != 13u && sub >= 1u && sub <= 5u) {
-        vec2 cc = fract(worldCell) - vec2(0.5);
+        vec2 cc = fract(globalCell) - vec2(0.5);
         float r = length(cc) * 2.2;
         float sev = float(sub) * 0.2;
         float bowl = smoothstep(0.85, 0.0, r);
@@ -277,12 +276,12 @@ float evaluateTerrainHeight(vec2 worldCell, vec2 globalCell, out vec4 fieldsOut)
     return microH + cliffH + roadH + craterH + waterH;
 }
 
-vec3 evaluateTerrainNormal(vec2 worldCell, vec2 globalCell) {
+vec3 evaluateTerrainNormal(vec2 globalCell) {
     float eps = 0.035;
     vec4 f0, fx, fy;
-    float h0 = evaluateTerrainHeight(worldCell, globalCell, f0);
-    float hx = evaluateTerrainHeight(worldCell + vec2(eps, 0.0), globalCell + vec2(eps, 0.0), fx);
-    float hy = evaluateTerrainHeight(worldCell + vec2(0.0, eps), globalCell + vec2(0.0, eps), fy);
+    float h0 = evaluateTerrainHeight(globalCell, f0);
+    float hx = evaluateTerrainHeight(globalCell + vec2(eps, 0.0), fx);
+    float hy = evaluateTerrainHeight(globalCell + vec2(0.0, eps), fy);
     return normalize(vec3(h0 - hx, h0 - hy, eps));
 }
 
@@ -1738,7 +1737,7 @@ void main() {
     int fpEntIdx   = isFirstPerson ? int(floor(fpParams.w + 0.01)) : -1;
     int fpWeaponKind = isFirstPerson ? int(floor(fract(fpParams.w) * 10.0 + 0.5)) : 0;
 
-    bool isShowcase = (uTac.hud_telemetry[0].x == 3200.0 && uTac.hud_telemetry[0].y == 2100.0);
+    bool isShowcase = (uTac.hud_telemetry[0].x == 3200.0 && uTac.hud_telemetry[0].y == 2100.0 && uTac.hud_telemetry[0].w == 78.0);
     vec2 perspUV = isShowcase ? vec2(
         0.5 + (tacUV.x - 0.5) * mix(1.18, 0.92, vUV.y),
         pow(clamp(vUV.y, 0.0005, 1.0), 0.86)
@@ -1786,7 +1785,7 @@ void main() {
 
     if (isFirstPerson) {
         vec4 fpTerrFields;
-        float fpBaseGroundZ = evaluateTerrainHeight(fpParams.xy, originCell + fpParams.xy, fpTerrFields);
+        float fpBaseGroundZ = evaluateTerrainHeight(originCell + fpParams.xy, fpTerrFields);
         fpEye = vec3(fpParams.xy, max(fpBaseGroundZ, 0.0) + max(fpParams.z, 0.22));
         vec3 fpFwd   = normalize(vec3(sin(camYaw) * cos(camPitch), -cos(camYaw) * cos(camPitch), sin(camPitch)));
         vec3 fpRight = vec3(cos(camYaw), sin(camYaw), 0.0);
@@ -1802,8 +1801,7 @@ void main() {
             vec3 p = fpEye + fpRayDir * t;
             if (p.z > 2.65 && fpRayDir.z > 0.0) break;
             vec4 tf;
-            float gridFade = smoothstep(0.0, 2.5, min(min(p.x, 29.0 - p.x), min(p.y, 19.0 - p.y)));
-            float h = evaluateTerrainHeight(p.xy, originCell + p.xy, tf) * gridFade;
+            float h = evaluateTerrainHeight(originCell + p.xy, tf);
             float diff = p.z - h;
             if (diff < 0.008) {
                 float tLo = max(0.18, t - max(0.05, t * 0.06));
@@ -1811,7 +1809,7 @@ void main() {
                 for (int b = 0; b < 4; ++b) {
                     float tMid = 0.5 * (tLo + tHi);
                     vec3 pMid = fpEye + fpRayDir * tMid;
-                    float hMid = evaluateTerrainHeight(pMid.xy, originCell + pMid.xy, tf);
+                    float hMid = evaluateTerrainHeight(originCell + pMid.xy, tf);
                     if (pMid.z < hMid) tHi = tMid; else tLo = tMid;
                 }
                 fpGroundT = 0.5 * (tLo + tHi);
@@ -1833,23 +1831,22 @@ void main() {
     // ------------------------------------------------------------------------
     vec4 terrainFields;
     vec2 camStepXY = V.xy / max(V.z, 0.36);
-    float hGround = evaluateTerrainHeight(groundCellXY, globalCellXY, terrainFields);
+    float hGround = evaluateTerrainHeight(globalCellXY, terrainFields);
     vec2 displacedCellXY = groundCellXY;
     vec2 displacedGlobalXY = globalCellXY;
-    if (!isFirstPerson && (isShowcase || isCam3D)) {
-        // 5-step iterative terrain relief refinement along 3D perspective camera ray
-        float reliefScale = isShowcase ? 0.92 : clamp((1.22 - camPitch) * 0.95, 0.15, 0.95);
+    if (isShowcase) {
+        // 5-step iterative terrain relief refinement along 3/4 perspective camera ray for showcase coastal mountains
         for (int rStep = 0; rStep < 5; ++rStep) {
-            displacedCellXY = groundCellXY + camStepXY * (hGround * reliefScale);
+            displacedCellXY = groundCellXY + camStepXY * (hGround * 0.92);
             displacedGlobalXY = originCell + displacedCellXY;
-            hGround = mix(hGround, evaluateTerrainHeight(displacedCellXY, displacedGlobalXY, terrainFields), 0.72);
+            hGround = mix(hGround, evaluateTerrainHeight(displacedGlobalXY, terrainFields), 0.72);
         }
     }
 
     vec3 terrainPos = vec3(displacedCellXY, hGround);
-    vec3 terrainN   = evaluateTerrainNormal(displacedCellXY, displacedGlobalXY);
+    vec3 terrainN   = evaluateTerrainNormal(displacedGlobalXY);
 
-    ivec2 cellIdx = ivec2(floor(displacedCellXY));
+    ivec2 cellIdx = ivec2(floor(displacedGlobalXY));
     uint cellRaw  = fetchCellRaw(cellIdx);
     uint cellLand = cellRaw & 15u;
     uint cellOvl  = (cellRaw >> 4u) & 15u;
@@ -1956,7 +1953,7 @@ void main() {
 
     // Apply Poured-Concrete Coastal Seawalls, Bastions & Building Bibs
     if (cellOvl == 14u || (cellOvl != 13u && cellSub == 7u)) {
-        vec2 gridF = abs(fract(displacedCellXY * 2.0) - 0.5);
+        vec2 gridF = abs(fract(displacedGlobalXY * 2.0) - 0.5);
         float seam = smoothstep(0.46, 0.50, max(gridF.x, gridF.y));
         vec3 concCol = mix(vec3(0.35, 0.36, 0.37), vec3(0.16, 0.17, 0.18), seam) * (0.88 + 0.24 * nMicro);
         surfAlbedo = mix(surfAlbedo, concCol, 0.88);
@@ -1975,7 +1972,7 @@ void main() {
 
     // Apply Blast Craters & Carbon Scorch Marks
     if (cellOvl != 13u && cellSub >= 1u && cellSub <= 6u) {
-        vec2 cc = fract(displacedCellXY) - vec2(0.5);
+        vec2 cc = fract(displacedGlobalXY) - vec2(0.5);
         float r = length(cc) * 2.1;
         float scorch = smoothstep(0.95, 0.15, r);
         surfAlbedo = mix(surfAlbedo, vec3(0.08, 0.07, 0.06), scorch * 0.82);
@@ -1997,9 +1994,9 @@ void main() {
     // ------------------------------------------------------------------------
     // 5. Photorealistic Deep Ocean Swells & Multi-Layered Crashing Whitewater Surf
     // ------------------------------------------------------------------------
-    float shoreBand = smoothstep(0.05, 0.45, waterMask) * smoothstep(0.85, 0.38, waterMask);
-    if (shoreBand > 0.01 || isCellBeach(cellRaw)) {
-        float wet = clamp(shoreBand * 1.7 + (isCellBeach(cellRaw) ? 0.55 : 0.0), 0.0, 1.0);
+    float shoreBand = smoothstep(0.02, 0.42, waterMask) * smoothstep(0.88, 0.36, waterMask);
+    if (shoreBand > 0.01) {
+        float wet = clamp(shoreBand * 1.85, 0.0, 1.0);
         surfAlbedo = mix(surfAlbedo, beachCol * 0.58, wet * 0.80);
         surfRough  = mix(surfRough, 0.18, wet);
     }
@@ -2080,15 +2077,15 @@ void main() {
     float bestCamU = 0.0;
     float fpBestT = fpGroundT;
 
-    // A. Check 3D Tiberium Crystal Clusters, Connected Walls & Supply Crates in nearby cells
-    ivec2 groundCellIdx = ivec2(floor(groundCellXY));
+    // A. Check 3D Tiberium Crystal Clusters, Connected Walls & Supply Crates in nearby cells (using world map coordinates)
+    ivec2 globalCellIdx = ivec2(floor(globalCellXY));
     if (!isFirstPerson) {
         for (int cy = -1; cy <= 1; ++cy) {
             for (int cx = -1; cx <= 1; ++cx) {
                 if (!isCam3D && (cy < 0 || cx > 0)) continue;
-                if (uTac.hud_telemetry[0].x == 3200.0 || roadMask > 0.10) continue;
-                ivec2 testCell = groundCellIdx + ivec2(cx, cy);
-                uint rawC = fetchCellRaw(testCell);
+                if (isShowcase || roadMask > 0.10) continue;
+                ivec2 testWorldCell = globalCellIdx + ivec2(cx, cy);
+                uint rawC = fetchCellRaw(testWorldCell);
                 uint ovlC = (rawC >> 4u) & 15u;
                 uint landC = rawC & 15u;
                 if (ovlC == 0u && landC != 4u && landC != 5u) continue;
@@ -2096,10 +2093,10 @@ void main() {
                 float u = 0.55;
                 for (int s = 0; s < 16; ++s) {
                     if (u <= bestCamU) break;
-                    vec3 p = vec3(groundCellXY + camDir.xy * u, camDir.z * u);
+                    vec3 pGlobal = vec3(globalCellXY + camDir.xy * u, camDir.z * u);
                     int mId;
                     vec3 lCoord;
-                    float d = mapCellStructures(p, testCell, rawC, mId, lCoord);
+                    float d = mapCellStructures(pGlobal, testWorldCell, rawC, mId, lCoord);
                     if (d < 0.006) {
                         bestCamU = u;
                         hitMat = mId;
@@ -2109,9 +2106,9 @@ void main() {
                         int dm;
                         vec3 dl;
                         hitNormal = normalize(vec3(
-                            mapCellStructures(p + vec3(eps, 0.0, 0.0), testCell, rawC, dm, dl) - d,
-                            mapCellStructures(p + vec3(0.0, eps, 0.0), testCell, rawC, dm, dl) - d,
-                            mapCellStructures(p + vec3(0.0, 0.0, eps), testCell, rawC, dm, dl) - d
+                            mapCellStructures(pGlobal + vec3(eps, 0.0, 0.0), testWorldCell, rawC, dm, dl) - d,
+                            mapCellStructures(pGlobal + vec3(0.0, eps, 0.0), testWorldCell, rawC, dm, dl) - d,
+                            mapCellStructures(pGlobal + vec3(0.0, 0.0, eps), testWorldCell, rawC, dm, dl) - d
                         ));
                         break;
                     }
@@ -2119,15 +2116,16 @@ void main() {
                 }
             }
         }
-    } else if (uTac.hud_telemetry[0].x != 3200.0) {
+    } else if (!isShowcase) {
         // First-Person 3D ray-march of Walls, Tiberium & Supply Crates along fpRayDir
         float tW = 0.35;
         for (int s = 0; s < 28; ++s) {
             if (tW >= min(fpBestT, 12.0)) break;
             vec3 pWorld = fpEye + fpRayDir * tW;
             if (pWorld.z > 0.65 && fpRayDir.z > 0.0) break;
-            ivec2 cIdx = ivec2(floor(pWorld.xy));
-            uint rawC = fetchCellRaw(cIdx);
+            vec2 pGlobalXY = originCell + pWorld.xy;
+            ivec2 worldCell = ivec2(floor(pGlobalXY));
+            uint rawC = fetchCellRaw(worldCell);
             uint ovlC = (rawC >> 4u) & 15u;
             uint landC = rawC & 15u;
             if (ovlC == 0u && landC != 4u && landC != 5u) {
@@ -2135,11 +2133,11 @@ void main() {
                 continue;
             }
             vec4 cTf;
-            float cGroundZ = evaluateTerrainHeight(pWorld.xy, originCell + pWorld.xy, cTf);
-            vec3 pCell = vec3(pWorld.xy, pWorld.z - cGroundZ);
+            float cGroundZ = evaluateTerrainHeight(pGlobalXY, cTf);
+            vec3 pCellGlobal = vec3(pGlobalXY, pWorld.z - cGroundZ);
             int mId;
             vec3 lCoord;
-            float d = mapCellStructures(pCell, cIdx, rawC, mId, lCoord);
+            float d = mapCellStructures(pCellGlobal, worldCell, rawC, mId, lCoord);
             if (d < 0.007) {
                 fpBestT = tW;
                 hitMat = mId;
@@ -2149,9 +2147,9 @@ void main() {
                 int dm;
                 vec3 dl;
                 hitNormal = normalize(vec3(
-                    mapCellStructures(pCell + vec3(eps, 0.0, 0.0), cIdx, rawC, dm, dl) - d,
-                    mapCellStructures(pCell + vec3(0.0, eps, 0.0), cIdx, rawC, dm, dl) - d,
-                    mapCellStructures(pCell + vec3(0.0, 0.0, eps), cIdx, rawC, dm, dl) - d
+                    mapCellStructures(pCellGlobal + vec3(eps, 0.0, 0.0), worldCell, rawC, dm, dl) - d,
+                    mapCellStructures(pCellGlobal + vec3(0.0, eps, 0.0), worldCell, rawC, dm, dl) - d,
+                    mapCellStructures(pCellGlobal + vec3(0.0, 0.0, eps), worldCell, rawC, dm, dl) - d
                 ));
                 break;
             }
@@ -2206,7 +2204,7 @@ void main() {
             if (perp2D > cullRad) continue;
 
             vec4 entTf;
-            float entGroundZ = evaluateTerrainHeight(d0.xy, originCell + d0.xy, entTf);
+            float entGroundZ = evaluateTerrainHeight(originCell + d0.xy, entTf);
             if (entTf.x > 0.35) entGroundZ = max(entGroundZ, 0.0);
 
             if (cat == 6 && tEnt < fpBestT + 1.2) {
@@ -2315,7 +2313,7 @@ void main() {
             vec2 wakeRel = groundCellXY - d0.xy;
             float wakeDist = length(wakeRel * vec2(1.05, 0.88));
             float wakeRing = smoothstep(0.95, 0.36, wakeDist) * smoothstep(0.14, 0.38, wakeDist);
-            float wakeLace = texture(uPbrTex, groundCellXY * 0.12 - vec2(sin(d1.x), -cos(d1.x)) * time * 0.04).b;
+            float wakeLace = texture(uPbrTex, displacedGlobalXY * 0.12 - vec2(sin(d1.x), -cos(d1.x)) * time * 0.04).b;
             float wakeMask = clamp(wakeRing * (0.45 + 0.85 * wakeLace), 0.0, 0.95);
             surfAlbedo = mix(surfAlbedo, vec3(0.94, 0.97, 1.0), wakeMask);
             surfRough  = mix(surfRough, 0.45, wakeMask);
@@ -2760,9 +2758,10 @@ void main() {
             roughness = 0.90;
             metallic = 0.0;
         } else if (hitMat == 27) {
-            // 3D Weathered Coastal Pine & Scrub Foliage Canopy (with high-frequency branch/needle normal detail)
-            float leafMicro = noise2D(P.xy * 42.0 + hitLocal.z * 28.0);
-            float leafClump = fbm3(P.xy * 16.0);
+            // 3D Weathered Coastal Pine & Scrub Foliage Canopy (with world-locked branch/needle normal detail)
+            vec2 worldHitXY = originCell + P.xy;
+            float leafMicro = noise2D(worldHitXY * 42.0 + hitLocal.z * 28.0);
+            float leafClump = fbm3(worldHitXY * 16.0);
             vec3 leafA = (theater == 3) ? vec3(0.68, 0.78, 0.86) : ((theater == 0) ? vec3(0.24, 0.30, 0.14) : vec3(0.09, 0.15, 0.07));
             vec3 leafB = (theater == 3) ? vec3(0.18, 0.30, 0.20) : ((theater == 0) ? vec3(0.38, 0.42, 0.18) : vec3(0.19, 0.27, 0.13));
             albedo = mix(leafA, leafB, smoothstep(-0.18, 0.22, hitLocal.z) * 0.55 + leafClump * 0.45) * (0.75 + 0.50 * leafMicro);
@@ -2947,7 +2946,7 @@ void main() {
     // 9. 3D Holographic Building Placement Grid & Rubber-Band Selection Box
     // ------------------------------------------------------------------------
     if (cellCursor != 0u && !isFirstPerson) {
-        vec2 cUV = fract(displacedCellXY);
+        vec2 cUV = fract(displacedGlobalXY);
         vec2 edgeD = min(cUV, 1.0 - cUV);
         float border = smoothstep(0.09, 0.02, min(edgeD.x, edgeD.y));
         float diag = step(0.5, fract((cUV.x + cUV.y) * 4.0 - time * 1.5));
